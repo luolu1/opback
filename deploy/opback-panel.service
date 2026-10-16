@@ -1,0 +1,26 @@
+[Unit]
+Description=opback Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opback
+Group=opback
+WorkingDirectory=/opt/opback
+# 前端（Web UI + 管理 API）与后端（Agent 接入 + 安装脚本）分别监听：
+#   前端 :8080 —— 只对管理员/内网开放
+#   后端 :8081 —— 对需要接入的机器开放
+# 环境变量 OPBACK_WEB_ADDR / OPBACK_AGENT_ADDR 或 /etc/opback/config.json 均可覆盖。
+ExecStart=/opt/opback/bin/opback-panel -config /etc/opback/config.json -web-addr :8080 -agent-addr :8081 -data /var/lib/opback
+Restart=on-failure
+RestartSec=3
+# 推荐把 OpenList 凭证等敏感值放进 EnvironmentFile（权限 0600）
+EnvironmentFile=-/etc/opback/panel.env
+# 安全加固（按需启用）
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/opback
+
+[Install]
+WantedBy=multi-user.target

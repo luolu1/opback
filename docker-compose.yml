@@ -1,0 +1,45 @@
+# opback — panel deployment via Docker Compose.
+#
+# Only the panel runs here; agents keep running as systemd services on the
+# machines being backed up (see deploy/).
+#
+# Split front-end / back-end ports:
+#   8080 — front-end: Web UI + admin API. Keep this on your LAN or behind a
+#          reverse proxy; do NOT expose it to the public internet.
+#   8081 — back-end: agent register/sync + installer. It must be reachable by
+#          every machine you want to enroll.
+#
+# host/port live in config.json (mounted read-only below). Secrets such as the
+# enrollment token and OpenList credentials come from the environment / .env so
+# they are never committed.
+#
+# Start:
+#   cp .env.example .env        # then edit OPBACK_ENROLL_TOKEN
+#   docker compose up -d --build
+
+services:
+  panel:
+    build:
+      context: .
+      args:
+        VERSION: docker
+    image: opback:latest
+    container_name: opback
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    environment:
+      # Shared secret agents must present when registering a node. Leave empty
+      # to allow open registration (not recommended on a public host).
+      OPBACK_ENROLL_TOKEN: "${OPBACK_ENROLL_TOKEN:-}"
+      # Optional: bootstrap the default OpenList connection on first start.
+      # OPBACK_OPENLIST_URL: "https://your-openlist.example.com"
+      # OPBACK_OPENLIST_USER: "admin"
+      # OPBACK_OPENLIST_PASS: "your-openlist-password"
+    volumes:
+      # Front-end / back-end host+port and directories are defined here.
+      - ./config.json:/app/config.json:ro
+      # Persistent state: store.json, settings, sessions.
+      - ./data:/data
+    command: ["-config", "/app/config.json"]

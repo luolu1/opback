@@ -1,0 +1,15 @@
+# Build output
+bin/
+*.exe
+
+# Runtime state
+data/
+panel-data/
+agent-state/
+
+# Secrets & local env
+.env
+
+# Logs / temp
+*.log
+*.tmp

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenList 备份面板</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- 登录界面 -->
+  <div id="login" class="login hidden">
+    <form class="login-card" id="login-form">
+      <div class="login-logo">OL</div>
+      <h1>OpenList 备份面板</h1>
+      <p class="muted">请登录以管理备份节点与任务</p>
+      <label>用户名<input id="login-user" value="admin" autocomplete="username" /></label>
+      <label>密码<input id="login-pass" type="password" autocomplete="current-password" /></label>
+      <label id="login-2fa-label" class="hidden">两步验证码<input id="login-2fa" inputmode="numeric" autocomplete="one-time-code" placeholder="6 位动态码，或恢复码" /></label>
+      <button type="submit" class="primary" id="login-submit">登录</button>
+      <div class="login-error" id="login-error"></div>
+    </form>
+  </div>
+
+  <!-- 主界面：左侧竖排菜单 + 内容区 -->
+  <div id="app" class="hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-logo">OL</span>
+        <span class="brand-text">
+          <b>OpenList 备份</b>
+          <small>管理面板</small>
+        </span>
+      </div>
+      <nav class="nav">
+        <a data-view="overview"><i class="ico">▤</i>概览</a>
+        <a data-view="nodes"><i class="ico">▣</i>节点</a>
+        <a data-view="jobs"><i class="ico">⟳</i>任务</a>
+        <a data-view="runs"><i class="ico">≡</i>运行记录</a>
+        <a data-view="openlists"><i class="ico">☁</i>OpenList 连接</a>
+        <a data-view="settings"><i class="ico">⚙</i>设置</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="version" class="muted">opback</span>
+      </div>
+    </aside>
+
+    <div class="content">
+      <header class="content-head">
+        <h1 id="view-title">概览</h1>
+        <div class="spacer"></div>
+        <span id="clock" class="muted mono"></span>
+        <button id="refresh" class="ghost icon-btn" title="刷新数据">⟳</button>
+        <div class="usermenu" id="usermenu">
+          <button id="user-btn" class="user-btn" title="账户">
+            <span class="avatar" id="user-avatar">A</span>
+            <span class="uname" id="user-name">admin</span>
+            <span class="caret">▾</span>
+          </button>
+          <div class="menu-pop hidden" id="user-pop">
+            <a data-action="profile"><i>◍</i>个人中心</a>
+            <a data-action="logout" class="danger-link"><i>⏻</i>退出登录</a>
+          </div>
+        </div>
+      </header>
+      <main id="view"></main>
+    </div>
+  </div>
+
+  <!-- 通用弹窗 -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2 id="modal-title">标题</h2>
+        <button id="modal-close" class="ghost">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
