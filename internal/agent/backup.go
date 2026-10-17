@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -185,6 +186,16 @@ func uploadOneFile(
 	fh, err := os.Open(f.abs)
 	if err != nil {
 		mu.Lock()
+		// The file was listed earlier but vanished before we got to it. This is
+		// normal for live directories (e.g. the panel's atomic-write temp files,
+		// which are renamed into place while the backup is running), so treat it
+		// as a skip instead of a failure.
+		if errors.Is(err, fs.ErrNotExist) {
+			stats.FilesSkipped++
+			mu.Unlock()
+			logf("跳过已消失的文件 %s", f.rel)
+			return
+		}
 		stats.FilesFailed++
 		mu.Unlock()
 		addErr("打开 %s 失败: %v", f.rel, err)
