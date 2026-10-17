@@ -378,7 +378,7 @@ sudo systemctl enable --now opback-agent
 
 - `config.json` 以只读方式挂载到容器内 `/app/config.json`，并由 `-config` 指定，因此 **host/port 由配置文件定义**。
 - 持久化数据挂载到宿主机 `./data`（容器内 `/data`）；Agent 二进制位于容器内 `/app/bin`。
-- 端口映射：宿主机 `8080`（前端）/ `8081`（后端）。
+- 端口映射：宿主机 `18820`（前端）/ `18821`（后端）→ 容器内 `8080` / `8081`（改 `docker-compose.yml` 即可调整宿主机端口）。
 - 敏感值（注册密钥、OpenList 凭证）从环境变量 / `.env` 注入，不写入镜像。
 
 ```bash
@@ -390,7 +390,7 @@ docker compose logs -f panel
 
 启动后同样用 `admin / admin` 登录。Agent 的安装命令仍由面板「节点」页生成，`install.sh` 会从容器内的 agent 二进制目录分发。
 
-> 只把后端 `8081` 暴露给需要接入的机器；前端 `8080` 建议限制在内网或置于 HTTPS 反代之后。
+> 只把后端 `18821` 暴露给需要接入的机器；前端 `18820` 建议限制在内网或置于 HTTPS 反代之后。
 
 ### cron 模式下的 Agent
 

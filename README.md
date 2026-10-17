@@ -407,7 +407,9 @@ The repo ships a `Dockerfile` (multi-stage, also cross-compiles Agent binaries),
   `-config`, so **host/port come from the config file**.
 - Persistent data is bind-mounted at `./data` (container `/data`); Agent
   binaries live in the container at `/app/bin`.
-- Ports: host `8080` (front-end) / `8081` (back-end).
+- Ports: host `18820` (front-end) / `18821` (back-end), mapped to the
+  container's `8080` / `8081`. Edit `docker-compose.yml` to change the host
+  side.
 - Secrets (enrollment token, OpenList credentials) are injected via environment
   / `.env` and never baked into the image.
 
@@ -422,8 +424,8 @@ Log in with `admin / admin` as before. Agent install commands are still generate
 by the **Nodes** page; `install.sh` serves the Agent binaries from inside the
 container.
 
-> Expose only the back-end `8081` to the machines you enroll; keep `8080` on your
-> LAN or behind an HTTPS reverse proxy.
+> Expose only the back-end `18821` to the machines you enroll; keep `18820` on
+> your LAN or behind an HTTPS reverse proxy.
 
 ### Agent under cron
 
