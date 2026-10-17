@@ -9,9 +9,6 @@
 #   8081 — back-end: agent register/sync + installer. It must be reachable by
 #          every machine you want to enroll.
 #
-# These are the ports *inside* the container (see config.json); the `ports:`
-# block below maps them to host ports 18820 / 18821.
-#
 # host/port live in config.json (mounted read-only below). Secrets such as the
 # enrollment token and OpenList credentials come from the environment / .env so
 # they are never committed.
@@ -30,8 +27,8 @@ services:
     container_name: opback
     restart: unless-stopped
     ports:
-      - "18820:8080"
-      - "18821:8081"
+      - "8080:8080"
+      - "8081:8081"
     environment:
       # Shared secret agents must present when registering a node. Leave empty
       # to allow open registration (not recommended on a public host).
