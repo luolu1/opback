@@ -249,7 +249,7 @@ func uploadOneFile(
 		// being written to while it was read, so the stored copy is not a
 		// consistent snapshot of the live file. Retry once with newer contents.
 		after, serr := os.Stat(f.abs)
-		if serr == nil && after.Size() == fi.Size() && after.ModTime().Unix() == fi.ModTime().Unix() {
+		if serr == nil && after.Size() == fi.Size() && after.ModTime().Equal(fi.ModTime()) {
 			consistent = true
 			break
 		}

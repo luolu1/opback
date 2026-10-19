@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,6 +31,15 @@ type mockOpenList struct {
 	files    map[string][]byte // absolute, normalized file paths
 	dirs     map[string]bool   // absolute, normalized directory paths
 	putCount int
+	// onPut, when set, runs after a file was stored. Tests use it to simulate a
+	// source file changing while it is being uploaded.
+	onPut func(string)
+}
+
+func (m *mockOpenList) setOnPut(fn func(string)) {
+	m.mu.Lock()
+	m.onPut = fn
+	m.mu.Unlock()
 }
 
 func newMockOpenList() *mockOpenList {
@@ -230,7 +240,11 @@ func (m *mockOpenList) handler() http.Handler {
 		m.ensureDir(path.Dir(p))
 		m.files[p] = body
 		m.putCount++
+		cb := m.onPut
 		m.mu.Unlock()
+		if cb != nil {
+			cb(p)
+		}
 		ok(w)
 	})
 	mux.HandleFunc("/api/fs/move", func(w http.ResponseWriter, r *http.Request) {
@@ -526,6 +540,69 @@ func TestPreHookFailureAbortsRun(t *testing.T) {
 	}
 	if !strings.Contains(run.Message, "nope") {
 		t.Fatalf("run message %q should include hook output", run.Message)
+	}
+}
+
+// TestVerifyConsistencyRetriesChangedFile simulates a file being written while
+// it is uploaded. The first upload must be rejected as unstable and retried,
+// and the final stored copy must be the newer content.
+func TestVerifyConsistencyRetriesChangedFile(t *testing.T) {
+	mock, panelTS, st, node, agentDir := newTestEnv(t)
+
+	src := t.TempDir()
+	target := filepath.Join(src, "live.txt")
+	mustWrite(t, target, "v1")
+
+	var puts int32
+	mock.setOnPut(func(p string) {
+		if p == "/backup/live.txt" && atomic.AddInt32(&puts, 1) == 1 {
+			// Different size guarantees detection even on filesystems with a
+			// coarse mtime resolution.
+			_ = os.WriteFile(target, []byte("v2-longer"), 0o644)
+		}
+	})
+
+	if _, err := st.CreateJob(types.Job{
+		Name:     "live file",
+		NodeID:   node.ID,
+		Source:   src,
+		Dest:     "/backup",
+		Enabled:  true,
+		Interval: 0,
+		Options: types.JobOptions{
+			Overwrite:         true,
+			Incremental:       true,
+			Concurrency:       1,
+			VerifyConsistency: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ag, err := agent.New(agent.Config{
+		PanelURL: panelTS.URL,
+		Name:     "test-node",
+		StateDir: agentDir,
+		Once:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := ag.Run(ctx); err != nil {
+		t.Fatalf("agent run: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&puts); got != 2 {
+		t.Fatalf("upload attempts = %d, want 2 (one retry)", got)
+	}
+	if got := string(mock.uploaded()["/backup/live.txt"]); got != "v2-longer" {
+		t.Fatalf("stored content = %q, want the post-change content", got)
+	}
+	run := latestRun(t, st)
+	if run.Status != types.RunSuccess || run.FilesDone != 1 {
+		t.Fatalf("run status=%s done=%d, want success/1", run.Status, run.FilesDone)
 	}
 }
 
