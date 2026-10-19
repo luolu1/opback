@@ -183,51 +183,92 @@ func uploadOneFile(
 		return
 	}
 
-	fh, err := os.Open(f.abs)
-	if err != nil {
-		mu.Lock()
-		// The file was listed earlier but vanished before we got to it. This is
-		// normal for live directories (e.g. the panel's atomic-write temp files,
-		// which are renamed into place while the backup is running), so treat it
-		// as a skip instead of a failure.
-		if errors.Is(err, fs.ErrNotExist) {
-			stats.FilesSkipped++
+	attempts := 1
+	if job.Options.VerifyConsistency {
+		attempts = 2
+	}
+	dest := joinOpenList(job.Dest, f.rel)
+
+	var (
+		uploaded   int64
+		finalInfo  os.FileInfo
+		consistent bool
+	)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		fh, err := os.Open(f.abs)
+		if err != nil {
+			// The file was listed earlier but vanished before we got to it. This
+			// is normal for live directories (e.g. the panel's atomic-write temp
+			// files, which are renamed into place while the backup is running),
+			// so treat it as a skip instead of a failure.
+			if errors.Is(err, fs.ErrNotExist) {
+				mu.Lock()
+				stats.FilesSkipped++
+				mu.Unlock()
+				logf("跳过已消失的文件 %s", f.rel)
+				return
+			}
+			mu.Lock()
+			stats.FilesFailed++
 			mu.Unlock()
-			logf("跳过已消失的文件 %s", f.rel)
+			addErr("打开 %s 失败: %v", f.rel, err)
 			return
 		}
-		stats.FilesFailed++
-		mu.Unlock()
-		addErr("打开 %s 失败: %v", f.rel, err)
-		return
-	}
-	defer fh.Close()
 
-	fi, err := fh.Stat()
-	if err != nil {
-		mu.Lock()
-		stats.FilesFailed++
-		mu.Unlock()
-		addErr("读取 %s 元数据失败: %v", f.rel, err)
-		return
-	}
+		fi, statErr := fh.Stat()
+		if statErr != nil {
+			fh.Close()
+			mu.Lock()
+			stats.FilesFailed++
+			mu.Unlock()
+			addErr("读取 %s 元数据失败: %v", f.rel, statErr)
+			return
+		}
 
-	dest := joinOpenList(job.Dest, f.rel)
-	err = ol.Put(ctx, dest, fh, fi.Size(), openlist.PutOptions{
-		Overwrite:    job.Options.Overwrite,
-		LastModified: fi.ModTime(),
-	})
+		err = ol.Put(ctx, dest, fh, fi.Size(), openlist.PutOptions{
+			Overwrite:    job.Options.Overwrite,
+			LastModified: fi.ModTime(),
+		})
+		fh.Close()
+		if err != nil {
+			mu.Lock()
+			stats.FilesFailed++
+			mu.Unlock()
+			addErr("上传 %s 失败: %v", f.rel, err)
+			return
+		}
+
+		uploaded = fi.Size()
+		finalInfo = fi
+		if !job.Options.VerifyConsistency {
+			consistent = true
+			break
+		}
+
+		// Re-stat after the upload. If size or mtime moved, the file was still
+		// being written to while it was read, so the stored copy is not a
+		// consistent snapshot of the live file. Retry once with newer contents.
+		after, serr := os.Stat(f.abs)
+		if serr == nil && after.Size() == fi.Size() && after.ModTime().Unix() == fi.ModTime().Unix() {
+			consistent = true
+			break
+		}
+		if attempt < attempts {
+			logf("文件 %s 在上传期间发生变化，重试上传（%d/%d）", f.rel, attempt, attempts)
+		}
+	}
 
 	mu.Lock()
-	defer mu.Unlock()
-	if err != nil {
-		stats.FilesFailed++
-		addErr("上传 %s 失败: %v", f.rel, err)
-		return
-	}
 	stats.FilesDone++
-	stats.BytesDone += fi.Size()
-	mf.set(f.rel, fi.Size(), fi.ModTime().Unix())
+	stats.BytesDone += uploaded
+	if consistent && finalInfo != nil {
+		mf.set(f.rel, finalInfo.Size(), finalInfo.ModTime().Unix())
+	}
+	mu.Unlock()
+
+	if !consistent {
+		addErr("文件 %s 在上传期间持续被修改，已保存当时内容但可能不是一致快照；如需一致备份请配置前置命令（例如数据库转储）或先暂停写入", f.rel)
+	}
 }
 
 // collectFiles walks the source root, honouring the include/exclude options.

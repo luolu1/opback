@@ -243,16 +243,39 @@ func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 		log.Printf("[%s] %s", job.Name, msg)
 	}
 
-	stats, errs := runBackup(ctx, ol, job, mf, func(s backupStats) {
-		r := base
-		r.FilesTotal = s.FilesTotal
-		r.FilesDone = s.FilesDone
-		r.FilesSkipped = s.FilesSkipped
-		r.FilesFailed = s.FilesFailed
-		r.BytesTotal = s.BytesTotal
-		r.BytesDone = s.BytesDone
-		a.putReport(runID, r)
-	}, logf)
+	// Pre hook: quiesce the service or dump the database before scanning.
+	var hookErrs []string
+	preOK := true
+	if err := runHook(ctx, "pre", job, trigger, logf); err != nil {
+		preOK = false
+		hookErrs = append(hookErrs, err.Error())
+		log.Printf("任务 %q 前置命令失败：%v", job.Name, err)
+	}
+
+	var stats backupStats
+	var errs []string
+	if preOK {
+		stats, errs = runBackup(ctx, ol, job, mf, func(s backupStats) {
+			r := base
+			r.FilesTotal = s.FilesTotal
+			r.FilesDone = s.FilesDone
+			r.FilesSkipped = s.FilesSkipped
+			r.FilesFailed = s.FilesFailed
+			r.BytesTotal = s.BytesTotal
+			r.BytesDone = s.BytesDone
+			a.putReport(runID, r)
+		}, logf)
+	}
+
+	// Post hook: always run it so a paused service is resumed or a temporary
+	// dump is cleaned up, even when the pre hook or the uploads failed.
+	if err := runHook(ctx, "post", job, trigger, logf); err != nil {
+		hookErrs = append(hookErrs, err.Error())
+		log.Printf("任务 %q 后置命令失败：%v", job.Name, err)
+	}
+	if len(hookErrs) > 0 {
+		errs = append(hookErrs, errs...)
+	}
 
 	final := base
 	final.FilesTotal = stats.FilesTotal
@@ -491,12 +514,15 @@ func finalStatus(s backupStats, errs []string) string {
 	switch {
 	case s.FilesTotal == 0 && len(errs) > 0:
 		return types.RunFailed
-	case s.FilesFailed == 0:
-		return types.RunSuccess
-	case s.FilesDone > 0 || s.FilesSkipped > 0:
+	case s.FilesFailed > 0 && s.FilesDone == 0 && s.FilesSkipped == 0:
+		return types.RunFailed
+	case len(errs) > 0:
+		// Something went wrong even though every selected file was handled:
+		// a post hook failed, the manifest could not be saved, or a file kept
+		// changing while it was read.
 		return types.RunPartial
 	default:
-		return types.RunFailed
+		return types.RunSuccess
 	}
 }
 

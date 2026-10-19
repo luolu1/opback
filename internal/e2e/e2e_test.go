@@ -419,6 +419,116 @@ func TestEndToEndBackupAndIncremental(t *testing.T) {
 	}
 }
 
+// TestHooksRunAroundBackup verifies that a pre command can materialise a
+// consistent dump, that the dump is uploaded, and that the post command runs
+// after the upload.
+func TestHooksRunAroundBackup(t *testing.T) {
+	mock, panelTS, st, node, agentDir := newTestEnv(t)
+
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "live.db"), "row-1")
+	marker := filepath.Join(t.TempDir(), "post.marker")
+
+	if _, err := st.CreateJob(types.Job{
+		Name:     "db dump",
+		NodeID:   node.ID,
+		Source:   src,
+		Dest:     "/backup",
+		Enabled:  true,
+		Interval: 0,
+		Options: types.JobOptions{
+			Overwrite:   true,
+			Incremental: true,
+			Concurrency: 1,
+			PreCommand:  "cp live.db snapshot.sql",
+			PostCommand: "printf done > " + marker,
+			// Short timeout: the test must fail fast if hooks hang.
+			HookTimeoutSeconds: 30,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ag, err := agent.New(agent.Config{
+		PanelURL: panelTS.URL,
+		Name:     "test-node",
+		StateDir: agentDir,
+		Once:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := ag.Run(ctx); err != nil {
+		t.Fatalf("agent run: %v", err)
+	}
+
+	ups := mock.uploaded()
+	if got := string(ups["/backup/snapshot.sql"]); got != "row-1" {
+		t.Fatalf("pre-command dump was not uploaded: paths=%v", keys(ups))
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("post command did not run: %v", err)
+	}
+	if run := latestRun(t, st); run.Status != types.RunSuccess {
+		t.Fatalf("run status = %s (message %q), want success", run.Status, run.Message)
+	}
+}
+
+// TestPreHookFailureAbortsRun verifies that no files are uploaded when the pre
+// command fails, and that the failure is reported to the panel.
+func TestPreHookFailureAbortsRun(t *testing.T) {
+	mock, panelTS, st, node, agentDir := newTestEnv(t)
+
+	src := t.TempDir()
+	mustWrite(t, filepath.Join(src, "a.txt"), "a")
+
+	if _, err := st.CreateJob(types.Job{
+		Name:     "broken hook",
+		NodeID:   node.ID,
+		Source:   src,
+		Dest:     "/backup",
+		Enabled:  true,
+		Interval: 0,
+		Options: types.JobOptions{
+			Overwrite:          true,
+			Incremental:        true,
+			Concurrency:        1,
+			PreCommand:         "echo nope >&2; exit 9",
+			HookTimeoutSeconds: 30,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ag, err := agent.New(agent.Config{
+		PanelURL: panelTS.URL,
+		Name:     "test-node",
+		StateDir: agentDir,
+		Once:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := ag.Run(ctx); err != nil {
+		t.Fatalf("agent run: %v", err)
+	}
+
+	if puts := mock.puts(); puts != 0 {
+		t.Fatalf("pre hook failed but %d file(s) were uploaded", puts)
+	}
+	run := latestRun(t, st)
+	if run.Status != types.RunFailed {
+		t.Fatalf("run status = %s, want failed", run.Status)
+	}
+	if !strings.Contains(run.Message, "nope") {
+		t.Fatalf("run message %q should include hook output", run.Message)
+	}
+}
+
 // newTestEnv wires a mock OpenList, a panel store and a pre-provisioned node
 // whose agent state is already on disk.
 func newTestEnv(t *testing.T) (*mockOpenList, *httptest.Server, *store.Store, types.Node, string) {

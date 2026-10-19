@@ -237,12 +237,20 @@ func (s *Server) validateJobReq(req jobRequest) error {
 	if !strings.HasPrefix(req.Dest, "/") {
 		return errString("目标路径必须以 / 开头")
 	}
+	if req.Options != nil {
+		if len(req.Options.PreCommand) > 8192 {
+			return errString("前置命令过长（最多 8192 字节）")
+		}
+		if len(req.Options.PostCommand) > 8192 {
+			return errString("后置命令过长（最多 8192 字节）")
+		}
+	}
 	return nil
 }
 
 func normalizeOptions(o *types.JobOptions) types.JobOptions {
 	if o == nil {
-		return types.JobOptions{Overwrite: true, Incremental: true, Concurrency: 2}
+		return types.JobOptions{Overwrite: true, Incremental: true, Concurrency: 2, HookTimeoutSeconds: 600}
 	}
 	out := *o
 	if out.Concurrency <= 0 {
@@ -254,6 +262,14 @@ func normalizeOptions(o *types.JobOptions) types.JobOptions {
 	if out.RetentionDays > 3650 {
 		out.RetentionDays = 3650
 	}
+	if out.HookTimeoutSeconds <= 0 {
+		out.HookTimeoutSeconds = 600
+	}
+	if out.HookTimeoutSeconds > 86400 {
+		out.HookTimeoutSeconds = 86400
+	}
+	out.PreCommand = strings.TrimSpace(out.PreCommand)
+	out.PostCommand = strings.TrimSpace(out.PostCommand)
 	return out
 }
 

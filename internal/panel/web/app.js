@@ -847,7 +847,7 @@ async function jobForm(id) {
     name: "", node_id: nodes[0] ? nodes[0].id : "", openlist_id: openlists[0] ? openlists[0].id : "",
     source: "", dest: "/backups",
     interval: 0, enabled: true,
-    options: { incremental: true, overwrite: true, follow_symlinks: false, concurrency: 2, include: [], exclude: [], delete_extra: false, retention_days: 7 },
+    options: { incremental: true, overwrite: true, follow_symlinks: false, concurrency: 2, include: [], exclude: [], delete_extra: false, retention_days: 7, pre_command: "", post_command: "", hook_timeout_seconds: 600, verify_consistency: true },
   };
   if (id) job = await api("GET", "/api/jobs/" + encodeURIComponent(id));
 
@@ -909,6 +909,21 @@ async function jobForm(id) {
       </div>
       <label class="field"><span>保留天数（0 表示立即删除）</span><input id="f-retention" type="number" min="0" max="3650" value="${esc(opts.retention_days != null ? opts.retention_days : 7)}" /></label>
     </div>
+    <div class="field"><span>前置命令（备份前在 agent 上执行，可选）</span>
+      <textarea id="f-pre" rows="2" placeholder="例如：sqlite3 /data/app.db &quot;.backup '/backups/app.db'&quot;">${esc(opts.pre_command || "")}</textarea>
+      <span class="muted" style="font-size:12px">用于数据库转储、暂停服务或创建快照；以运行 agent 的用户身份经系统 shell 执行。失败则不执行本次备份。</span>
+    </div>
+    <div class="field"><span>后置命令（备份结束后执行，可选）</span>
+      <textarea id="f-post" rows="2" placeholder="例如：rm -f /backups/app.db">${esc(opts.post_command || "")}</textarea>
+      <span class="muted" style="font-size:12px">无论备份成功与否都会执行，可用于恢复服务或清理临时转储。</span>
+    </div>
+    <div class="grid2">
+      <label class="field"><span>命令超时（秒）</span><input id="f-hook-timeout" type="number" min="1" max="86400" value="${esc(opts.hook_timeout_seconds || 600)}" /></label>
+      <div class="field"><span>一致性</span>
+        <label class="checkbox"><input type="checkbox" id="f-verify" ${opts.verify_consistency ? "checked" : ""}/> 校验文件在上传期间是否被修改</label>
+        <span class="muted" style="font-size:12px">活跃写入的文件/数据库会被检测到，自动重试一次；仍变化则标记为「部分成功」。</span>
+      </div>
+    </div>
     <div class="actions">
       <button type="button" id="f-cancel">取消</button>
       <button type="button" class="primary" id="f-save">保存</button>
@@ -943,6 +958,10 @@ async function jobForm(id) {
         exclude: splitLines($("#f-exclude").value),
         delete_extra: $("#f-delextra").checked,
         retention_days: parseInt($("#f-retention").value || "0", 10),
+        pre_command: $("#f-pre").value.trim(),
+        post_command: $("#f-post").value.trim(),
+        hook_timeout_seconds: parseInt($("#f-hook-timeout").value || "600", 10),
+        verify_consistency: $("#f-verify").checked,
       },
     };
     try {

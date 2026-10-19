@@ -65,6 +65,22 @@ type JobOptions struct {
 	// for this many days before they are permanently purged. Only meaningful
 	// when DeleteExtra is set. 0 deletes extras immediately.
 	RetentionDays int `json:"retention_days"`
+	// PreCommand is a shell command run on the agent before a run starts. It
+	// can pause a service, freeze a filesystem or dump a database into the
+	// source directory so the backup captures a consistent snapshot.
+	PreCommand string `json:"pre_command,omitempty"`
+	// PostCommand is a shell command run after a run finishes. It runs even if
+	// the pre command or the uploads failed, so it can resume services and
+	// remove temporary dumps.
+	PostCommand string `json:"post_command,omitempty"`
+	// HookTimeoutSeconds bounds each pre/post command. 0 uses a 10 minute
+	// default.
+	HookTimeoutSeconds int `json:"hook_timeout_seconds,omitempty"`
+	// VerifyConsistency re-stats every uploaded file. If its size or mtime
+	// changed while it was read, the upload is retried once; if it keeps
+	// changing the run is reported as partial, because the stored copy is not
+	// a consistent snapshot of a file that is being written to.
+	VerifyConsistency bool `json:"verify_consistency,omitempty"`
 }
 
 // Job is a single backup definition: copy a local directory on a node to a

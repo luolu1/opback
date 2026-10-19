@@ -497,6 +497,55 @@ OpenList 连接已独立到左侧「OpenList 连接」页面管理（可配置�
 | `concurrency` | 并发上传的文件数 |
 | `delete_extra` | 删除目标端「多余」文件：目标端存在但源端（经包含/排除筛选后）已不存在的文件 |
 | `retention_days` | 保留天数：多余文件先移入回收站，超过该天数才真正删除。`0` 表示立即删除 |
+| `pre_command` | 备份前在 Agent 上执行的 shell 命令（数据库转储、暂停服务等）；非零退出则本次不备份 |
+| `post_command` | 备份结束后执行的 shell 命令；即使备份失败也会执行（恢复服务、清理临时转储） |
+| `hook_timeout_seconds` | 单条前置/后置命令的超时，默认 `600` 秒 |
+| `verify_consistency` | 上传后重新 stat 每个文件：上传期间被修改则重试一次，仍变化则把本次运行标记为 `partial` |
+
+### 活跃文件与数据库的一致性备份
+
+直接复制正在写入的数据库文件，可能得到「撕裂」的快照。两个任务选项用于解决这个问题：
+
+- **`pre_command` / `post_command`**：在备份前后于 Agent 上执行 shell 命令。常见做法是把数据库
+  转储到源目录（或暂停服务），备份该目录，再在后置命令中清理。每条命令都有超时
+  （`hook_timeout_seconds`，默认 600 秒）。前置命令失败时不会上传任何文件；后置命令无论如何都会执行。
+- **`verify_consistency`**：上传后重新读取文件大小与 mtime。若在上传期间发生变化，会自动重试一次；
+  仍然变化则本次运行标记为 `partial` 并给出告警，而不是静默保留可能不一致的副本。持续变化的文件
+  不会写入增量 manifest，下次运行会重新上传。
+
+钩子通过系统 shell（Unix 为 `/bin/sh -c`，Windows 为 `cmd /C`）**以 Agent 运行身份**执行（通常是
+root）。环境变量包含 `OPBACK_JOB_ID`、`OPBACK_JOB_NAME`、`OPBACK_SOURCE`、`OPBACK_DEST`、
+`OPBACK_TRIGGER`、`OPBACK_HOOK`（`pre`/`post`），工作目录为源目录。请只配置可信命令。
+
+```sh
+# SQLite：先生成一致副本，备份暂存目录，再清理。
+pre_command:  sqlite3 /var/lib/app/app.db ".backup '/var/backups/app/app.db'"
+post_command: rm -f /var/backups/app/app.db
+source:       /var/backups/app
+
+# MySQL：在一致性事务中做逻辑转储。
+pre_command:  mysqldump --single-transaction --routines --events app > /var/backups/app/app.sql
+post_command: rm -f /var/backups/app/app.sql
+source:       /var/backups/app
+
+# PostgreSQL：自定义格式转储。
+pre_command:  pg_dump -Fc app > /var/backups/app/app.dump
+post_command: rm -f /var/backups/app/app.dump
+source:       /var/backups/app
+
+# 没有转储工具：暂停服务（会造成停机）。
+pre_command:  systemctl stop myservice
+post_command: systemctl start myservice
+source:       /var/lib/myservice
+
+# LVM/ZFS/Btrfs：创建快照，备份挂载后的快照，再删除。
+pre_command:  lvcreate --size 1G --snapshot --name app-snap /dev/vg0/app && mount /dev/vg0/app-snap /mnt/app-snap
+post_command: umount /mnt/app-snap && lvremove -f /dev/vg0/app-snap
+source:       /mnt/app-snap
+```
+
+> 暂存目录（如 `/var/backups/app`）应仅用于该任务，并在 `pre_command` 中清理旧文件，否则历史转储也会被上传。
+> 也可用 `include` / `exclude` 进一步限制范围。
 
 ---
 
@@ -574,7 +623,8 @@ OpenList 连接已独立到左侧「OpenList 连接」页面管理（可配置�
 4. **改密/开关 2FA 会使全部会话失效**；管理员密码以 PBKDF2-HMAC-SHA256（210000 次迭代 + 随机盐）存储，旧的 SHA256 哈希会在下次登录时自动升级。
 5. **响应头加固**：默认下发 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Cross-Origin-Opener-Policy` 与 CSP；启用 TLS（`tls_cert`/`tls_key`）时额外加 `Strict-Transport-Security`，并把 Cookie 标记为 `Secure`。
 6. **凭证会被下发到 Agent**：OpenList 密码存于面板 `store.json`（权限 `0600`）并下发给对应节点，Agent 存于 `state.json`（`0600`）。请确保面板↔Agent 链路可信（内网、VPN 或 HTTPS 反代），并限制数据目录权限。
-7. **Agent 权限**：以 root 运行 Agent 会使其可读取整机文件，请仅授予必要权限并谨慎配置源路径。
+7. **Agent 权限**：以 root 运行 Agent 会使其可读取整机文件，请仅授予必要权限并谨慎配置源路径。任务的
+   `pre_command` / `post_command` 钩子同样**以 Agent 运行身份**执行，因此面板管理员可以在每台已注册节点上执行任意 shell 命令。
 8. **明文存储**：`store.json` 中的 OpenList 密码与 Telegram Bot Token 目前为明文（依赖文件系统权限保护）；Agent 侧尚未做端到端加密。
 
 > 忘记密码或丢失 2FA 时，可用命令行重置（见[账户安全](#账户安全2fa-与重置)），无需登录。

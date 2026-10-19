@@ -150,6 +150,11 @@ guarded by a file lock).
    credentials, but do not expose the back-end port to the public internet.
 6. Password strength is not complexity-checked (only length ≥ 8); 2FA recovery
    codes are the admin's responsibility.
+7. Job `pre_command` / `post_command` hooks execute arbitrary shell commands on
+   the Agent **as the Agent user** (usually root). Anyone who can create or edit
+   jobs on the panel effectively has remote code execution on every enrolled
+   node; protect the admin account (strong password + 2FA) and treat panel
+   access as root-equivalent on those hosts.
 
 ---
 

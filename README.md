@@ -533,6 +533,64 @@ page and can be multiple.
 | `concurrency` | number of concurrent uploads |
 | `delete_extra` | delete "extra" destination files: present on the destination but absent from the (filtered) source |
 | `retention_days` | extra files move to trash first, then are permanently deleted after this many days; `0` = delete immediately |
+| `pre_command` | shell command run on the agent before the run (dump a database, pause a service); a non-zero exit aborts the run |
+| `post_command` | shell command run after the run, even if it failed (resume the service, remove the temporary dump) |
+| `hook_timeout_seconds` | per-hook timeout; default `600` |
+| `verify_consistency` | re-stat each uploaded file: if it changed during upload, retry once and then report the run as `partial` |
+
+### Consistent backups of live files and databases
+
+Copying a database file while it is being written can capture a torn snapshot.
+Two job options address this:
+
+- **`pre_command` / `post_command`** run a shell command on the agent before and
+  after the run. The usual pattern is to dump the database into the source
+  directory (or pause the service), back that up, then clean up in the post
+  command. Each hook has a timeout (`hook_timeout_seconds`, default 600 s). If
+  the pre command fails, no files are uploaded; the post command runs either
+  way.
+- **`verify_consistency`** re-stats every file after uploading it. If its size
+  or mtime changed while it was read, the upload is retried once; if it keeps
+  changing the run is reported as `partial` with a warning, instead of silently
+  keeping a copy that may be inconsistent. Files that keep changing are not
+  recorded in the incremental manifest, so they are retried on the next run.
+
+Hooks run through the system shell (`/bin/sh -c`, or `cmd /C` on Windows) **as
+the user the agent runs as** (usually root). They receive `OPBACK_JOB_ID`,
+`OPBACK_JOB_NAME`, `OPBACK_SOURCE`, `OPBACK_DEST`, `OPBACK_TRIGGER` and
+`OPBACK_HOOK` (`pre`/`post`) in the environment, and run with the source
+directory as their working directory. Only configure commands you trust.
+
+```sh
+# SQLite: create a consistent copy, back up the staging directory, remove it.
+pre_command:  sqlite3 /var/lib/app/app.db ".backup '/var/backups/app/app.db'"
+post_command: rm -f /var/backups/app/app.db
+source:       /var/backups/app
+
+# MySQL: logical dump inside a consistent transaction.
+pre_command:  mysqldump --single-transaction --routines --events app > /var/backups/app/app.sql
+post_command: rm -f /var/backups/app/app.sql
+source:       /var/backups/app
+
+# PostgreSQL: custom-format dump.
+pre_command:  pg_dump -Fc app > /var/backups/app/app.dump
+post_command: rm -f /var/backups/app/app.dump
+source:       /var/backups/app
+
+# No dump utility: pause the service (this causes downtime).
+pre_command:  systemctl stop myservice
+post_command: systemctl start myservice
+source:       /var/lib/myservice
+
+# LVM/ZFS/Btrfs: snapshot, back up the mounted snapshot, then remove it.
+pre_command:  lvcreate --size 1G --snapshot --name app-snap /dev/vg0/app && mount /dev/vg0/app-snap /mnt/app-snap
+post_command: umount /mnt/app-snap && lvremove -f /dev/vg0/app-snap
+source:       /mnt/app-snap
+```
+
+> Keep a staging directory such as `/var/backups/app` dedicated to this job and
+> remove stale files in `pre_command`; otherwise old dumps are uploaded too.
+> `include` / `exclude` can narrow the selection further.
 
 ---
 
@@ -636,7 +694,9 @@ measures; see the full audit in [`SECURITY.md`](SECURITY.md). Key points:
    live in `state.json` (`0600`). Keep the panel↔Agent link trusted (LAN, VPN or
    HTTPS reverse proxy) and restrict the data directory.
 7. **Agent privileges**: running as root lets the Agent read the whole host;
-   grant only what is necessary and scope source paths carefully.
+   grant only what is necessary and scope source paths carefully. Job
+   `pre_command` / `post_command` hooks also run **as the Agent user**, so a
+   panel admin can execute arbitrary shell commands on every enrolled node.
 8. **Plaintext at rest**: OpenList passwords and the Telegram bot token in
    `store.json` are currently plaintext (protected only by file permissions);
    there is no end-to-end encryption on the Agent side.
