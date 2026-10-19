@@ -579,6 +579,11 @@ job, and narrow the selection with `include` / `exclude` if needed. This split
 is intentional: the agent reads and copies files, but never runs shell
 commands, so a compromised panel cannot execute code on enrolled nodes.
 
+> **Upgrading from the hook build:** `pre_command` / `post_command` have been
+> removed. Existing values are ignored and dropped the next time the job is
+> saved; move dump/pause commands to a host cron job or systemd timer, as shown
+> above.
+
 > Staging copies can contain sensitive data. They are removed after each run,
 > but a hard crash can leave one behind in `staging_dir`; point it at a
 > dedicated directory (or tmpfs) and clean leftovers during maintenance.
