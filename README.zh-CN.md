@@ -497,55 +497,45 @@ OpenList 连接已独立到左侧「OpenList 连接」页面管理（可配置�
 | `concurrency` | 并发上传的文件数 |
 | `delete_extra` | 删除目标端「多余」文件：目标端存在但源端（经包含/排除筛选后）已不存在的文件 |
 | `retention_days` | 保留天数：多余文件先移入回收站，超过该天数才真正删除。`0` 表示立即删除 |
-| `pre_command` | 备份前在 Agent 上执行的 shell 命令（数据库转储、暂停服务等）；非零退出则本次不备份 |
-| `post_command` | 备份结束后执行的 shell 命令；即使备份失败也会执行（恢复服务、清理临时转储） |
-| `hook_timeout_seconds` | 单条前置/后置命令的超时，默认 `600` 秒 |
-| `verify_consistency` | 上传后重新 stat 每个文件：上传期间被修改则重试一次，仍变化则把本次运行标记为 `partial` |
+| `staging` | 先把选中的文件复制到临时目录，再从副本上传；适合正在写入的文件/目录 |
+| `staging_dir` | 临时副本所在目录；留空使用系统临时目录；不能位于源目录内 |
+| `verify_consistency` | 检测文件是否变化：启用 `staging` 时校验复制阶段，否则校验上传阶段；自动重试一次，仍变化则标记 `partial` |
 
-### 活跃文件与数据库的一致性备份
+### 活跃文件、暂存与数据库
 
-直接复制正在写入的数据库文件，可能得到「撕裂」的快照。两个任务选项用于解决这个问题：
+一次备份的扫描很快，但上传可能持续很久，文件可能在上传期间被改写。两个任务选项用于缩小这个窗口：
 
-- **`pre_command` / `post_command`**：在备份前后于 Agent 上执行 shell 命令。常见做法是把数据库
-  转储到源目录（或暂停服务），备份该目录，再在后置命令中清理。每条命令都有超时
-  （`hook_timeout_seconds`，默认 600 秒）。前置命令失败时不会上传任何文件；后置命令无论如何都会执行。
-- **`verify_consistency`**：上传后重新读取文件大小与 mtime。若在上传期间发生变化，会自动重试一次；
-  仍然变化则本次运行标记为 `partial` 并给出告警，而不是静默保留可能不一致的副本。持续变化的文件
-  不会写入增量 manifest，下次运行会重新上传。
+- **`staging` / `staging_dir`**：Agent 先把选中的文件复制到一个私有的临时目录，再从副本上传。
+  这样即使源文件持续写入，上传读取的也是一份稳定的字节集合，耗时的上传阶段不会再读取活跃文件。
+  副本会额外占用与选择集大致相当的磁盘空间（默认放在系统临时目录，如 `/tmp`），目录权限为 `0700`，
+  运行结束（无论成功失败）后删除。临时目录不能位于源目录内。复制由 Agent 自己完成，
+  **不会执行任何用户提供的命令**。
+- **`verify_consistency`**：启用 `staging` 时在复制阶段校验源文件是否变化，未启用时在上传后校验。
+  检测到变化会自动重试一次；仍然变化则把本次运行标记为 `partial` 并告警，且不写入增量 manifest，
+  下次运行会重新尝试。
 
-钩子通过系统 shell（Unix 为 `/bin/sh -c`，Windows 为 `cmd /C`）**以 Agent 运行身份**执行（通常是
-root）。环境变量包含 `OPBACK_JOB_ID`、`OPBACK_JOB_NAME`、`OPBACK_SOURCE`、`OPBACK_DEST`、
-`OPBACK_TRIGGER`、`OPBACK_HOOK`（`pre`/`post`），工作目录为源目录。请只配置可信命令。
+暂存只能避免「上传阶段」读到撕裂数据；直接复制正在运行的数据库文件本身仍不保证事务一致性。
+MySQL、PostgreSQL、SQLite 建议用 cron / systemd timer 生成数据库原生转储（或文件系统/LVM 快照），
+再让备份任务指向转储目录：
 
 ```sh
-# SQLite：先生成一致副本，备份暂存目录，再清理。
-pre_command:  sqlite3 /var/lib/app/app.db ".backup '/var/backups/app/app.db'"
-post_command: rm -f /var/backups/app/app.db
-source:       /var/backups/app
-
-# MySQL：在一致性事务中做逻辑转储。
-pre_command:  mysqldump --single-transaction --routines --events app > /var/backups/app/app.sql
-post_command: rm -f /var/backups/app/app.sql
-source:       /var/backups/app
-
-# PostgreSQL：自定义格式转储。
-pre_command:  pg_dump -Fc app > /var/backups/app/app.dump
-post_command: rm -f /var/backups/app/app.dump
-source:       /var/backups/app
-
-# 没有转储工具：暂停服务（会造成停机）。
-pre_command:  systemctl stop myservice
-post_command: systemctl start myservice
-source:       /var/lib/myservice
-
-# LVM/ZFS/Btrfs：创建快照，备份挂载后的快照，再删除。
-pre_command:  lvcreate --size 1G --snapshot --name app-snap /dev/vg0/app && mount /dev/vg0/app-snap /mnt/app-snap
-post_command: umount /mnt/app-snap && lvremove -f /dev/vg0/app-snap
-source:       /mnt/app-snap
+# /etc/cron.d/app-backup（示例）
+5 3 * * * root sqlite3 /var/lib/app/app.db ".backup '/srv/app-backup/app.db'"
+15 3 * * * root pg_dump -Fc app > /srv/app-backup/app.dump
 ```
 
-> 暂存目录（如 `/var/backups/app`）应仅用于该任务，并在 `pre_command` 中清理旧文件，否则历史转储也会被上传。
-> 也可用 `include` / `exclude` 进一步限制范围。
+```yaml
+source: /srv/app-backup
+options:
+  staging: true             # 任务运行时转储文件可能仍在写入
+  verify_consistency: true
+```
+
+转储目录应专用于该任务；在 cron 中清理旧转储，必要时用 `include` / `exclude` 缩小范围。
+这种拆分是有意为之：Agent 只读取、复制文件，不执行 shell 命令，因此面板被攻破也无法在节点上执行代码。
+
+> 暂存副本可能包含敏感数据。每次运行结束都会删除，但进程被强杀时可能在 `staging_dir` 留下残留；
+> 建议使用专用目录（或 tmpfs），并在维护时清理残留。
 
 ---
 
@@ -623,8 +613,10 @@ source:       /mnt/app-snap
 4. **改密/开关 2FA 会使全部会话失效**；管理员密码以 PBKDF2-HMAC-SHA256（210000 次迭代 + 随机盐）存储，旧的 SHA256 哈希会在下次登录时自动升级。
 5. **响应头加固**：默认下发 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Cross-Origin-Opener-Policy` 与 CSP；启用 TLS（`tls_cert`/`tls_key`）时额外加 `Strict-Transport-Security`，并把 Cookie 标记为 `Secure`。
 6. **凭证会被下发到 Agent**：OpenList 密码存于面板 `store.json`（权限 `0600`）并下发给对应节点，Agent 存于 `state.json`（`0600`）。请确保面板↔Agent 链路可信（内网、VPN 或 HTTPS 反代），并限制数据目录权限。
-7. **Agent 权限**：以 root 运行 Agent 会使其可读取整机文件，请仅授予必要权限并谨慎配置源路径。任务的
-   `pre_command` / `post_command` 钩子同样**以 Agent 运行身份**执行，因此面板管理员可以在每台已注册节点上执行任意 shell 命令。
+7. **Agent 权限**：以 root 运行 Agent 会使其可读取整机文件，请仅授予必要权限并谨慎配置源路径。
+   Agent **不执行任何用户提供的命令**：任务选项只用于选择路径、复制与上传文件，因此面板被攻破也无法在
+   节点上执行 shell 代码。但被攻破的 Agent 仍能读取并外传其运行用户可读的任何内容。启用 `staging` 时，
+   敏感数据会被复制到本地临时目录（权限 `0700`，每次运行后删除；进程被强杀时可能残留）。
 8. **明文存储**：`store.json` 中的 OpenList 密码与 Telegram Bot Token 目前为明文（依赖文件系统权限保护）；Agent 侧尚未做端到端加密。
 
 > 忘记密码或丢失 2FA 时，可用命令行重置（见[账户安全](#账户安全2fa-与重置)），无需登录。

@@ -150,11 +150,13 @@ guarded by a file lock).
    credentials, but do not expose the back-end port to the public internet.
 6. Password strength is not complexity-checked (only length ≥ 8); 2FA recovery
    codes are the admin's responsibility.
-7. Job `pre_command` / `post_command` hooks execute arbitrary shell commands on
-   the Agent **as the Agent user** (usually root). Anyone who can create or edit
-   jobs on the panel effectively has remote code execution on every enrolled
-   node; protect the admin account (strong password + 2FA) and treat panel
-   access as root-equivalent on those hosts.
+7. The Agent executes **no user-provided commands**, so panel access does not
+   give remote code execution on enrolled nodes. However, the Agent needs the
+   privileges required to read the configured sources (often root), so a
+   compromised Agent or panel can read and exfiltrate any file those privileges
+   allow. With `staging` enabled, selected files are also copied into a local
+   temporary directory (mode `0700`, removed after each run); a crash can leave
+   a copy containing sensitive data behind.
 
 ---
 

@@ -433,31 +433,41 @@ func TestEndToEndBackupAndIncremental(t *testing.T) {
 	}
 }
 
-// TestHooksRunAroundBackup verifies that a pre command can materialise a
-// consistent dump, that the dump is uploaded, and that the post command runs
-// after the upload.
-func TestHooksRunAroundBackup(t *testing.T) {
+// TestStagingUploadsStableCopy simulates a file being written while it is
+// uploaded. With staging enabled the agent copies the file first and uploads
+// only that stable copy, so the bytes written during the upload never end up in
+// the stored backup.
+func TestStagingUploadsStableCopy(t *testing.T) {
 	mock, panelTS, st, node, agentDir := newTestEnv(t)
 
 	src := t.TempDir()
-	mustWrite(t, filepath.Join(src, "live.db"), "row-1")
-	marker := filepath.Join(t.TempDir(), "post.marker")
+	target := filepath.Join(src, "live.txt")
+	mustWrite(t, target, "v1")
+	stagingRoot := t.TempDir()
+
+	var puts int32
+	mock.setOnPut(func(p string) {
+		if p == "/backup/live.txt" && atomic.AddInt32(&puts, 1) == 1 {
+			// The source changes after the copy was made. The upload must not
+			// see this new content.
+			_ = os.WriteFile(target, []byte("v2-longer"), 0o644)
+		}
+	})
 
 	if _, err := st.CreateJob(types.Job{
-		Name:     "db dump",
+		Name:     "staged live file",
 		NodeID:   node.ID,
 		Source:   src,
 		Dest:     "/backup",
 		Enabled:  true,
 		Interval: 0,
 		Options: types.JobOptions{
-			Overwrite:   true,
-			Incremental: true,
-			Concurrency: 1,
-			PreCommand:  "cp live.db snapshot.sql",
-			PostCommand: "printf done > " + marker,
-			// Short timeout: the test must fail fast if hooks hang.
-			HookTimeoutSeconds: 30,
+			Overwrite:         true,
+			Incremental:       true,
+			Concurrency:       1,
+			Staging:           true,
+			StagingDir:        stagingRoot,
+			VerifyConsistency: true,
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -478,39 +488,45 @@ func TestHooksRunAroundBackup(t *testing.T) {
 		t.Fatalf("agent run: %v", err)
 	}
 
-	ups := mock.uploaded()
-	if got := string(ups["/backup/snapshot.sql"]); got != "row-1" {
-		t.Fatalf("pre-command dump was not uploaded: paths=%v", keys(ups))
+	if got := atomic.LoadInt32(&puts); got != 1 {
+		t.Fatalf("upload attempts = %d, want 1 (staged copy is stable)", got)
 	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("post command did not run: %v", err)
+	if got := string(mock.uploaded()["/backup/live.txt"]); got != "v1" {
+		t.Fatalf("stored content = %q, want the pre-change snapshot %q", got, "v1")
 	}
-	if run := latestRun(t, st); run.Status != types.RunSuccess {
-		t.Fatalf("run status = %s (message %q), want success", run.Status, run.Message)
+	if got := string(mustRead(t, target)); got != "v2-longer" {
+		t.Fatalf("source content = %q, want it to keep the live writes", got)
+	}
+	if entries, err := os.ReadDir(stagingRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("staging directory was not cleaned up: entries=%d err=%v", len(entries), err)
+	}
+	if run := latestRun(t, st); run.Status != types.RunSuccess || run.FilesDone != 1 {
+		t.Fatalf("run status=%s done=%d (message %q), want success/1", run.Status, run.FilesDone, run.Message)
 	}
 }
 
-// TestPreHookFailureAbortsRun verifies that no files are uploaded when the pre
-// command fails, and that the failure is reported to the panel.
-func TestPreHookFailureAbortsRun(t *testing.T) {
+// TestStagingRejectsTempDirInsideSource verifies that the agent refuses a
+// staging directory inside the source tree instead of copying the tree into
+// itself.
+func TestStagingRejectsTempDirInsideSource(t *testing.T) {
 	mock, panelTS, st, node, agentDir := newTestEnv(t)
 
 	src := t.TempDir()
 	mustWrite(t, filepath.Join(src, "a.txt"), "a")
 
 	if _, err := st.CreateJob(types.Job{
-		Name:     "broken hook",
+		Name:     "bad staging dir",
 		NodeID:   node.ID,
 		Source:   src,
 		Dest:     "/backup",
 		Enabled:  true,
 		Interval: 0,
 		Options: types.JobOptions{
-			Overwrite:          true,
-			Incremental:        true,
-			Concurrency:        1,
-			PreCommand:         "echo nope >&2; exit 9",
-			HookTimeoutSeconds: 30,
+			Overwrite:   true,
+			Incremental: true,
+			Concurrency: 1,
+			Staging:     true,
+			StagingDir:  filepath.Join(src, "tmp"),
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -532,14 +548,14 @@ func TestPreHookFailureAbortsRun(t *testing.T) {
 	}
 
 	if puts := mock.puts(); puts != 0 {
-		t.Fatalf("pre hook failed but %d file(s) were uploaded", puts)
+		t.Fatalf("staging was rejected but %d file(s) were uploaded", puts)
 	}
 	run := latestRun(t, st)
 	if run.Status != types.RunFailed {
 		t.Fatalf("run status = %s, want failed", run.Status)
 	}
-	if !strings.Contains(run.Message, "nope") {
-		t.Fatalf("run message %q should include hook output", run.Message)
+	if !strings.Contains(run.Message, "不能位于源目录") {
+		t.Fatalf("run message %q should explain the staging directory conflict", run.Message)
 	}
 }
 
@@ -808,6 +824,15 @@ func mustWrite(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func keys(m map[string][]byte) []string {
