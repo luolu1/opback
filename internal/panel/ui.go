@@ -20,6 +20,10 @@ func (s *Server) uiHandler() http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The UI is embedded in the panel binary, but browsers otherwise cache
+		// app.js/style.css heuristically and can keep showing the previous
+		// release after an upgrade. Revalidate on every use.
+		w.Header().Set("Cache-Control", "no-cache")
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			p = "index.html"
