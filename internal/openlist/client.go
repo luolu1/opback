@@ -12,7 +12,8 @@
 //   - POST /api/fs/remove_empty_directory  recursively remove empty dirs
 //
 // Authentication uses the raw token in the Authorization header (no "Bearer"
-// prefix), matching OpenList's documented scheme. A 401 triggers a single
+// prefix), matching OpenList's documented scheme. A rejected token, whether
+// returned as HTTP 401 or as an OpenList envelope code 401, triggers a single
 // re-login attempt.
 package openlist
 
@@ -165,13 +166,14 @@ func bytesBody(b []byte) bodyFactory {
 	}
 }
 
-// do performs a request, ensuring a token and retrying once on 401.
+// do performs a request, ensuring a token and retrying once when the token is
+// rejected. OpenList reports an expired token either as HTTP 401 or, for some
+// endpoints, as HTTP 200 with {"code":401,...}; both must trigger a re-login.
 func (c *Client) do(ctx context.Context, method, apiPath string, header http.Header, makeBody bodyFactory) (*apiResponse, error) {
 	if err := c.ensureToken(ctx); err != nil {
 		return nil, err
 	}
 
-	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		var body io.ReadCloser
 		var size int64
@@ -207,17 +209,6 @@ func (c *Client) do(ctx context.Context, method, apiPath string, header http.Hea
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
-			c.mu.Lock()
-			c.token = ""
-			c.mu.Unlock()
-			if err := c.Login(ctx); err != nil {
-				return nil, err
-			}
-			lastErr = fmt.Errorf("openlist: unauthorized")
-			continue
-		}
-
 		env := &apiResponse{}
 		if len(raw) > 0 {
 			// Not every endpoint guarantees JSON; fall back to status text.
@@ -227,6 +218,23 @@ func (c *Client) do(ctx context.Context, method, apiPath string, header http.Hea
 			}
 		} else {
 			env.Code = resp.StatusCode
+		}
+
+		authFailure := resp.StatusCode == http.StatusUnauthorized || env.Code == http.StatusUnauthorized
+		if authFailure && attempt == 0 {
+			c.mu.Lock()
+			c.token = ""
+			c.mu.Unlock()
+			if err := c.Login(ctx); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if authFailure {
+			if env.Message == "" {
+				env.Message = "unauthorized"
+			}
+			return env, fmt.Errorf("openlist: %s %s: %s", method, apiPath, env.Message)
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -240,7 +248,7 @@ func (c *Client) do(ctx context.Context, method, apiPath string, header http.Hea
 		}
 		return env, nil
 	}
-	return nil, lastErr
+	return nil, fmt.Errorf("openlist: %s %s: request failed", method, apiPath)
 }
 
 // List returns the contents of an OpenList directory. Because the API caps
@@ -330,12 +338,16 @@ func (c *Client) EnsureDir(ctx context.Context, dir string) error {
 }
 
 // Put streams a file to destPath. size is the number of bytes that will be
-// read from r; pass -1 if unknown.
-func (c *Client) Put(ctx context.Context, destPath string, r io.Reader, size int64, opts PutOptions) error {
+// read from r; pass -1 if unknown. r must be seekable so an upload can be
+// replayed after the token is refreshed.
+func (c *Client) Put(ctx context.Context, destPath string, r io.ReadSeeker, size int64, opts PutOptions) error {
 	if size < 0 {
 		return fmt.Errorf("openlist: put %s: unknown content length", destPath)
 	}
 	makeBody := func() (io.ReadCloser, int64, error) {
+		if _, err := r.Seek(0, io.SeekStart); err != nil {
+			return nil, 0, fmt.Errorf("openlist: put %s: rewind: %w", destPath, err)
+		}
 		return io.NopCloser(r), size, nil
 	}
 
