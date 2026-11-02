@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -53,6 +54,9 @@ type Agent struct {
 	runningMu sync.Mutex
 	running   map[string]bool
 
+	cancelsMu sync.Mutex
+	cancels   map[string]context.CancelFunc
+
 	// syncCh nudges the main loop to sync immediately.
 	syncCh chan struct{}
 }
@@ -83,6 +87,7 @@ func New(cfg Config) (*Agent, error) {
 		olClients: map[string]*openlist.Client{},
 		reports:   map[string]types.RunReport{},
 		running:   map[string]bool{},
+		cancels:   map[string]context.CancelFunc{},
 		syncCh:    make(chan struct{}, 1),
 	}, nil
 }
@@ -117,6 +122,8 @@ func (a *Agent) Run(ctx context.Context) error {
 					if job, ok := a.findJob(cmd.JobID); ok {
 						a.startJob(job, types.TriggerManual)
 					}
+				case "cancel":
+					a.cancelRun(cmd.RunID)
 				case "uninstall":
 					if err := a.uninstall(ctx); err != nil {
 						log.Printf("远程卸载失败：%v（请在目标机器上手动清理）", err)
@@ -203,6 +210,9 @@ func (a *Agent) startJob(job types.Job, trigger string) bool {
 func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 	started := time.Now().UTC()
 	runID := "run_" + randHex(8)
+	runCtx, cancel := context.WithCancel(ctx)
+	a.registerRun(runID, cancel)
+	defer a.unregisterRun(runID)
 	base := types.RunReport{
 		RunID:     runID,
 		JobID:     job.ID,
@@ -216,8 +226,13 @@ func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 
 	ol := a.openListClientFor(job.OpenListID)
 	if ol == nil {
-		base.Status = types.RunFailed
-		base.Message = "面板尚未配置该任务对应的 OpenList 连接"
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			base.Status = types.RunCancelled
+			base.Message = "任务已取消"
+		} else {
+			base.Status = types.RunFailed
+			base.Message = "面板尚未配置该任务对应的 OpenList 连接"
+		}
 		base.FinishedAt = time.Now().UTC()
 		a.putReport(runID, base)
 		a.requestSync()
@@ -233,17 +248,11 @@ func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 
 	var logMu sync.Mutex
 	var logLines []string
-	logf := func(format string, args ...any) {
-		msg := fmt.Sprintf(format, args...)
+	var latest backupStats
+	publish := func(s backupStats) {
 		logMu.Lock()
-		if len(logLines) < 200 {
-			logLines = append(logLines, msg)
-		}
-		logMu.Unlock()
-		log.Printf("[%s] %s", job.Name, msg)
-	}
-
-	stats, errs := runBackup(ctx, ol, job, mf, func(s backupStats) {
+		latest = s
+		logs := append([]string(nil), logLines...)
 		r := base
 		r.FilesTotal = s.FilesTotal
 		r.FilesDone = s.FilesDone
@@ -251,8 +260,35 @@ func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 		r.FilesFailed = s.FilesFailed
 		r.BytesTotal = s.BytesTotal
 		r.BytesDone = s.BytesDone
+		r.Log = logs
 		a.putReport(runID, r)
-	}, logf)
+		a.requestSync()
+		logMu.Unlock()
+	}
+	logf := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		logMu.Lock()
+		if len(logLines) < 200 {
+			logLines = append(logLines, msg)
+		}
+		s := latest
+		logs := append([]string(nil), logLines...)
+		r := base
+		r.FilesTotal = s.FilesTotal
+		r.FilesDone = s.FilesDone
+		r.FilesSkipped = s.FilesSkipped
+		r.FilesFailed = s.FilesFailed
+		r.BytesTotal = s.BytesTotal
+		r.BytesDone = s.BytesDone
+		r.Log = logs
+		a.putReport(runID, r)
+		a.requestSync()
+		logMu.Unlock()
+		log.Printf("[%s] %s", job.Name, msg)
+	}
+
+	logf("开始任务：%s -> %s", job.Source, job.Dest)
+	stats, errs := runBackup(runCtx, ol, job, mf, publish, logf)
 
 	final := base
 	final.FilesTotal = stats.FilesTotal
@@ -262,8 +298,8 @@ func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 	final.BytesTotal = stats.BytesTotal
 	final.BytesDone = stats.BytesDone
 	final.FinishedAt = time.Now().UTC()
-	final.Status = finalStatus(stats, errs)
-	final.Message = summary(stats, errs)
+	final.Status = finalStatus(runCtx, stats, errs)
+	final.Message = summary(runCtx, stats, errs)
 	logMu.Lock()
 	final.Log = append([]string(nil), logLines...)
 	logMu.Unlock()
@@ -272,6 +308,30 @@ func (a *Agent) runJob(ctx context.Context, job types.Job, trigger string) {
 
 	log.Printf("任务 %q 结束：%s（上传 %d，跳过 %d，失败 %d，共 %d 字节）",
 		job.Name, final.Status, stats.FilesDone, stats.FilesSkipped, stats.FilesFailed, stats.BytesDone)
+}
+
+func (a *Agent) registerRun(runID string, cancel context.CancelFunc) {
+	a.cancelsMu.Lock()
+	a.cancels[runID] = cancel
+	a.cancelsMu.Unlock()
+}
+
+func (a *Agent) unregisterRun(runID string) {
+	a.cancelsMu.Lock()
+	delete(a.cancels, runID)
+	a.cancelsMu.Unlock()
+}
+
+func (a *Agent) cancelRun(runID string) {
+	if runID == "" {
+		return
+	}
+	a.cancelsMu.Lock()
+	cancel := a.cancels[runID]
+	a.cancelsMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // ---- reporting -----------------------------------------------------------
@@ -487,7 +547,10 @@ func (a *Agent) findJob(id string) (types.Job, bool) {
 
 // ---- helpers -------------------------------------------------------------
 
-func finalStatus(s backupStats, errs []string) string {
+func finalStatus(ctx context.Context, s backupStats, errs []string) string {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return types.RunCancelled
+	}
 	switch {
 	case s.FilesTotal == 0 && len(errs) > 0:
 		return types.RunFailed
@@ -503,7 +566,10 @@ func finalStatus(s backupStats, errs []string) string {
 	}
 }
 
-func summary(s backupStats, errs []string) string {
+func summary(ctx context.Context, s backupStats, errs []string) string {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return "任务已取消"
+	}
 	if len(errs) > 0 {
 		head := errs[0]
 		if len(errs) > 1 {

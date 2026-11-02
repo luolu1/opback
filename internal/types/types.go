@@ -7,10 +7,11 @@ import "time"
 
 // Run status values.
 const (
-	RunRunning = "running"
-	RunSuccess = "success"
-	RunPartial = "partial" // finished but some files failed
-	RunFailed  = "failed"
+	RunRunning   = "running"
+	RunSuccess   = "success"
+	RunPartial   = "partial" // finished but some files failed
+	RunFailed    = "failed"
+	RunCancelled = "cancelled"
 )
 
 // Trigger values describe what started a run.
@@ -226,7 +227,8 @@ type SyncRequest struct {
 // uninstall itself.
 type Command struct {
 	JobID  string `json:"job_id,omitempty"`
-	Action string `json:"action"` // "run" | "uninstall"
+	RunID  string `json:"run_id,omitempty"`
+	Action string `json:"action"`
 }
 
 // SyncResponse is everything an agent needs for its next cycle.
