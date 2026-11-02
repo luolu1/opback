@@ -154,7 +154,7 @@ func (s *Server) notifyRun(run types.Run) {
 // isTerminalRun reports whether a run has finished (success, partial or failed).
 func isTerminalRun(status string) bool {
 	switch status {
-	case types.RunSuccess, types.RunPartial, types.RunFailed:
+	case types.RunSuccess, types.RunPartial, types.RunFailed, types.RunCancelled:
 		return true
 	}
 	return false
@@ -164,7 +164,7 @@ func shouldNotify(tg types.TelegramSettings, status string) bool {
 	switch status {
 	case types.RunSuccess, types.RunPartial:
 		return tg.NotifySuccess
-	case types.RunFailed:
+	case types.RunFailed, types.RunCancelled:
 		return tg.NotifyFailure
 	}
 	return false
@@ -188,6 +188,8 @@ func statusWord(status string) string {
 		return "部分失败"
 	case types.RunFailed:
 		return "失败"
+	case types.RunCancelled:
+		return "已取消"
 	case types.RunRunning:
 		return "进行中"
 	}
@@ -202,6 +204,8 @@ func statusIcon(status string) string {
 		return "⚠️"
 	case types.RunFailed:
 		return "❌"
+	case types.RunCancelled:
+		return "⏹️"
 	case types.RunRunning:
 		return "🔄"
 	}

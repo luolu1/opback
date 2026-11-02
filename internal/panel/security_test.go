@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opback/internal/store"
+	"opback/internal/types"
 )
 
 func newTestPanel(t *testing.T) (*store.Store, *Server) {
@@ -232,6 +233,54 @@ func TestAgentRegisterCannotHijackWithoutToken(t *testing.T) {
 	}
 	if again.Token == "" || again.Token == existing.Token {
 		t.Fatal("re-register should mint a fresh token")
+	}
+}
+
+func TestCancelRunQueuesRunSpecificCommand(t *testing.T) {
+	st, srv := newTestPanel(t)
+	node, err := st.CreateNode("worker", "worker", "linux", "amd64", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := types.Run{ID: "run-1", JobID: "job-1", NodeID: node.ID, Status: types.RunRunning, StartedAt: time.Now()}
+	if err := st.UpsertRun(run); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.WebHandler())
+	defer ts.Close()
+	client := newJarClient(t)
+
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/runs/run-1/cancel", nil, http.StatusUnauthorized, nil)
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/auth/login", map[string]string{"username": "admin", "password": "admin"}, http.StatusOK, nil)
+	var response map[string]any
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/runs/run-1/cancel", nil, http.StatusOK, &response)
+	if response["run_id"] != run.ID || response["queued"] != true {
+		t.Fatalf("unexpected cancel response: %#v", response)
+	}
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/runs/run-1/cancel", nil, http.StatusOK, nil)
+	commands := srv.drainCommands(node.ID)
+	if len(commands) != 1 || commands[0].Action != "cancel" || commands[0].RunID != run.ID || commands[0].JobID != run.JobID {
+		t.Fatalf("unexpected queued commands: %#v", commands)
+	}
+}
+
+func TestCancelRunRejectsUnknownAndTerminalRuns(t *testing.T) {
+	st, srv := newTestPanel(t)
+	node, err := st.CreateNode("worker", "worker", "linux", "amd64", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertRun(types.Run{ID: "finished", JobID: "job-1", NodeID: node.ID, Status: types.RunCancelled, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.WebHandler())
+	defer ts.Close()
+	client := newJarClient(t)
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/auth/login", map[string]string{"username": "admin", "password": "admin"}, http.StatusOK, nil)
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/runs/missing/cancel", nil, http.StatusNotFound, nil)
+	doJSON(t, client, http.MethodPost, ts.URL+"/api/runs/finished/cancel", nil, http.StatusConflict, nil)
+	if commands := srv.drainCommands(node.ID); len(commands) != 0 {
+		t.Fatalf("terminal cancellation queued commands: %#v", commands)
 	}
 }
 

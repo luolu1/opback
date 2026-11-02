@@ -286,6 +286,25 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, http.StatusNotFound, "运行记录不存在")
 }
 
+func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request) {
+	run, ok := s.store.GetRun(r.PathValue("id"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "运行记录不存在")
+		return
+	}
+	if isTerminalRun(run.Status) {
+		writeErr(w, http.StatusConflict, "运行已结束，无法取消")
+		return
+	}
+	s.enqueueCommand(run.NodeID, types.Command{Action: "cancel", RunID: run.ID, JobID: run.JobID})
+	writeOK(w, map[string]any{
+		"ok":      true,
+		"queued":  true,
+		"run_id":  run.ID,
+		"message": "已下发取消指令，等待 agent 确认",
+	})
+}
+
 // ---- overview ------------------------------------------------------------
 
 // overviewPoint is one day of activity on the dashboard's bar chart.

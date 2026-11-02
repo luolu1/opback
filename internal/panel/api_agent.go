@@ -173,9 +173,14 @@ func (s *Server) handleAgentUninstall(w http.ResponseWriter, r *http.Request) {
 func (s *Server) enqueueCommand(nodeID string, cmd types.Command) {
 	s.cmdMu.Lock()
 	defer s.cmdMu.Unlock()
-	// Collapse duplicate "run" commands for the same job.
 	for _, c := range s.commands[nodeID] {
-		if c.Action == cmd.Action && c.JobID == cmd.JobID {
+		if c.Action != cmd.Action {
+			continue
+		}
+		if cmd.Action == "cancel" && c.RunID == cmd.RunID {
+			return
+		}
+		if cmd.Action == "run" && c.JobID == cmd.JobID {
 			return
 		}
 	}

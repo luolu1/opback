@@ -168,6 +168,7 @@ func (s *Server) registerWeb(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/jobs/{id}/run", s.admin(s.handleRunJob))
 	mux.HandleFunc("GET /api/runs", s.admin(s.handleListRuns))
 	mux.HandleFunc("GET /api/runs/{id}", s.admin(s.handleGetRun))
+	mux.HandleFunc("POST /api/runs/{id}/cancel", s.admin(s.handleCancelRun))
 	mux.HandleFunc("GET /api/settings", s.admin(s.handleGetSettings))
 	mux.HandleFunc("PUT /api/settings", s.admin(s.handleUpdateSettings))
 	mux.HandleFunc("POST /api/settings/password", s.admin(s.handleChangePassword))
