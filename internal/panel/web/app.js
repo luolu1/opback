@@ -781,7 +781,7 @@ async function showInstall(id) {
     <p class="muted">新节点首次安装：在目标 Linux 机器上以 root 执行下面这一行命令，会自动下载 agent 并注册为 systemd 服务（开机自启）：</p>
     <pre class="log" id="install-cmd">${esc(cmd)}</pre>
     <div class="row"><button class="primary small" id="copy-install">复制安装命令</button></div>
-    <p class="muted">平滑更新（已安装的机器）：重新执行下面这条命令即可就地覆盖升级到面板上的最新 agent —— 替换二进制并重启服务，保留节点身份与备份任务：</p>
+    <p class="muted">平滑更新（已安装的机器）：重新执行下面这条命令，会从当前面板下载其提供的最新 Agent 构建（${esc(state.me?.version || "dev")}），替换二进制并重启服务，保留节点身份与备份任务：</p>
     <pre class="log" id="update-cmd">${esc(updateCmd)}</pre>
     <div class="row"><button class="small" id="copy-update">复制更新命令</button></div>
     ${set.enroll_token ? "" : `<p class="muted">提示：面板当前未设置「注册密钥」，任何主机都能注册节点；建议到「设置」里配置注册密钥。</p>`}

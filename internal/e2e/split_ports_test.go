@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -71,6 +72,51 @@ func TestInstallScriptSupportsInPlaceUpdate(t *testing.T) {
 	}
 	if !strings.Contains(body, "TMP_BIN") {
 		t.Fatal("installer must replace the binary atomically to survive a running service")
+	}
+	for _, want := range []string{"Cache-Control: no-cache", "Pragma: no-cache", "下载版本:", "-version", "?v=$(date +%s)"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("installer missing latest-version behavior %q", want)
+		}
+	}
+	if strings.Contains(body, "wget --no-cache") {
+		t.Fatal("installer must not rely on wget-specific cache flags")
+	}
+}
+
+func TestAgentDownloadServesCurrentBinaryWithoutCaching(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "store.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentDir := t.TempDir()
+	path := filepath.Join(agentDir, "opback-agent-linux-amd64")
+	if err := os.WriteFile(path, []byte("agent-build-one"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := panel.New(st)
+	srv.SetAgentDir(agentDir)
+	server := httptest.NewServer(srv.AgentHandler())
+	defer server.Close()
+
+	first := doRequest(t, http.DefaultClient, http.MethodGet, server.URL+"/downloads/agent/linux/amd64", nil, http.StatusOK)
+	if string(first) != "agent-build-one" {
+		t.Fatalf("first binary = %q", first)
+	}
+	resp, err := http.Get(server.URL + "/downloads/agent/linux/amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	if err := os.WriteFile(path, []byte("agent-build-two"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	second := doRequest(t, http.DefaultClient, http.MethodGet, server.URL+"/downloads/agent/linux/amd64?v=2", nil, http.StatusOK)
+	if string(second) != "agent-build-two" {
+		t.Fatalf("updated binary = %q, want latest panel artifact", second)
 	}
 }
 

@@ -119,7 +119,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
-DL_URL="$DOWNLOAD_BASE/downloads/agent/$OS/$ARCH"
+DL_URL="$DOWNLOAD_BASE/downloads/agent/$OS/$ARCH?v=$(date +%s)"
 if [ -f "$BIN_PATH" ]; then
   echo "==> 检测到已有安装，执行覆盖更新（保留节点身份与备份任务）"
 fi
@@ -127,13 +127,16 @@ echo "==> 下载 agent: $DL_URL"
 TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL "$DL_URL" -o "$TMP"
+  curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$DL_URL" -o "$TMP"
 elif command -v wget >/dev/null 2>&1; then
   wget -qO "$TMP" "$DL_URL"
 else
   echo "错误: 需要 curl 或 wget 才能下载 agent。" >&2
   exit 1
 fi
+chmod 0755 "$TMP"
+AGENT_VERSION=$("$TMP" -version 2>/dev/null || printf '%s' 'unknown')
+echo "==> 下载版本: $AGENT_VERSION"
 
 # Write to a temp file in the same directory and rename it into place: this
 # atomically replaces a running binary instead of failing with "Text file busy".
@@ -223,6 +226,7 @@ func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
+	w.Header().Set("Cache-Control", "no-store")
 	http.ServeContent(w, r, name, fi.ModTime(), f)
 }
 
