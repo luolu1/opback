@@ -132,7 +132,7 @@ function fmtInterval(sec) {
   return h / 24 + " 天";
 }
 
-const STATUS_LABEL = { success: "成功", failed: "失败", partial: "部分失败", running: "进行中" };
+const STATUS_LABEL = { success: "成功", failed: "失败", partial: "部分失败", running: "进行中", cancelled: "已取消" };
 
 function statusBadge(s) {
   const cls = s === "running" ? "running pulse" : esc(s);
@@ -261,11 +261,20 @@ async function api(method, path, body) {
 /* ---------- 弹窗 ---------- */
 
 function openModal(title, html) {
+  runPollToken++;
+  clearTimeout(runPollTimer);
+  runPollTimer = null;
   $("#modal-title").textContent = title;
   $("#modal-body").innerHTML = html;
   $("#modal").classList.remove("hidden");
 }
+let runPollTimer = null;
+let runPollToken = 0;
+
 function closeModal() {
+  runPollToken++;
+  clearTimeout(runPollTimer);
+  runPollTimer = null;
   $("#modal").classList.add("hidden");
   $("#modal-body").innerHTML = "";
 }
@@ -554,14 +563,35 @@ function bindRunsTable() {
   });
 }
 
-async function showRun(id) {
-  let run = null;
-  try { run = await api("GET", "/api/runs/" + encodeURIComponent(id)); } catch { /* ignore */ }
-  if (!run) return;
+function runProgress(run) {
+  const filesTotal = Number(run.files_total) || 0;
+  const bytesTotal = Number(run.bytes_total) || 0;
+  const filesDone = Number(run.files_done) || 0;
+  const bytesDone = Number(run.bytes_done) || 0;
+  const percent = bytesTotal > 0 ? Math.round((bytesDone / bytesTotal) * 100) : (filesTotal > 0 ? Math.round((filesDone / filesTotal) * 100) : 0);
+  return Math.max(0, Math.min(100, percent));
+}
+
+function runLog(run) {
+  return Array.isArray(run.log) ? run.log.join("\n") : String(run.log || "");
+}
+
+function runDetailHtml(run) {
   const sec = runSeconds(run);
   const dur = run.status === "running" ? "进行中" : (sec === null ? "-" : fmtDuration(sec));
   const speed = sec ? fmtSpeed(run.bytes_done, sec) : "-";
-  openModal("运行详情", `
+  const percent = runProgress(run);
+  const canCancel = run.status === "running";
+  return `
+    <div class="run-progress-head">
+      <div><span class="muted">当前进度</span><strong>${percent}%</strong></div>
+      ${canCancel ? `<button type="button" class="danger" id="run-cancel">取消运行</button>` : ""}
+    </div>
+    <div class="progress run-progress" aria-label="运行进度"><div style="width:${percent}%"></div></div>
+    <div class="run-counters">
+      <span><b>${run.files_done || 0}</b> / ${run.files_total || 0} 个文件</span>
+      <span><b>${fmtBytes(run.bytes_done)}</b> / ${fmtBytes(run.bytes_total)} 已传输</span>
+    </div>
     <div class="detail-grid">
       <div class="field"><span>任务</span><b>${esc(run.job_name || run.job_id)}</b></div>
       <div class="field"><span>状态</span><div>${statusBadge(run.status)}</div></div>
@@ -574,13 +604,54 @@ async function showRun(id) {
       <div class="field"><span>开始时间</span><b>${fmtTime(run.started_at)}</b></div>
       <div class="field"><span>结束时间</span><b>${run.finished_at ? fmtTime(run.finished_at) : "-"}</b></div>
       <div class="field"><span>平均速度</span><b>${speed}</b></div>
-      <div class="field"><span>文件统计</span><b>${run.files_done} 上传 / ${run.files_skipped} 跳过 / ${run.files_failed} 失败（共 ${run.files_total}）</b></div>
+      <div class="field"><span>文件统计</span><b>${run.files_done || 0} 上传 / ${run.files_skipped || 0} 跳过 / ${run.files_failed || 0} 失败（共 ${run.files_total || 0}）</b></div>
       <div class="field"><span>数据量</span><b>${fmtBytes(run.bytes_done)} 已传 / ${fmtBytes(run.bytes_total)} 总计</b></div>
       <div class="field"><span>运行 ID</span><b class="mono">${esc(run.id)}</b></div>
     </div>
     <div class="field"><span>信息</span><b>${esc(run.message || "-")}</b></div>
-    <div class="field"><span>日志</span><pre class="log">${esc((run.log || []).join("\n") || "无")}</pre></div>
-  `);
+    <div class="field"><span>日志</span><pre class="log">${esc(runLog(run) || "无")}</pre></div>
+  `;
+}
+
+function bindRunDetail(run, id, token) {
+  const cancel = $("#run-cancel");
+  if (cancel) cancel.addEventListener("click", async () => {
+    cancel.disabled = true;
+    try {
+      await api("POST", "/api/runs/" + encodeURIComponent(id) + "/cancel", {});
+      toast("已请求取消运行");
+    } catch (err) {
+      cancel.disabled = false;
+      toast(err.message, true);
+    }
+  });
+  if (run.status !== "running") return;
+  runPollTimer = setTimeout(() => pollRun(id, token), 1500);
+}
+
+async function pollRun(id, token) {
+  if (token !== runPollToken || $("#modal").classList.contains("hidden")) return;
+  try {
+    const run = await api("GET", "/api/runs/" + encodeURIComponent(id));
+    if (token !== runPollToken || $("#modal").classList.contains("hidden")) return;
+    $("#modal-body").innerHTML = runDetailHtml(run);
+    bindRunDetail(run, id, token);
+  } catch (err) {
+    if (token === runPollToken) {
+      toast(err.message, true);
+      runPollTimer = setTimeout(() => pollRun(id, token), 1500);
+    }
+  }
+}
+
+async function showRun(id) {
+  closeModal();
+  const token = runPollToken;
+  let run = null;
+  try { run = await api("GET", "/api/runs/" + encodeURIComponent(id)); } catch (err) { toast(err.message, true); }
+  if (!run || token !== runPollToken) return;
+  openModal("运行详情", runDetailHtml(run));
+  bindRunDetail(run, id, runPollToken);
 }
 
 /* ---------- 节点 ---------- */
@@ -881,6 +952,7 @@ async function jobForm(id) {
         <input id="f-dest" class="grow" value="${esc(job.dest)}" placeholder="/backups/web-1" />
         <button type="button" id="f-browse">浏览</button>
       </div>
+      <small class="field-help">目录源会放入“目标目录/源目录名”；如果源是文件，则直接放入目标目录。</small>
     </label>
     <div id="oa-browser" class="hidden"></div>
     <div class="grid2">

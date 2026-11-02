@@ -254,6 +254,7 @@ td .mono { font-size: 12px; }
 .badge.error { color: var(--red); border-color: rgba(248,113,113,.4); }
 .badge.partial { color: var(--amber); border-color: rgba(251,191,36,.4); }
 .badge.running { color: var(--accent); border-color: rgba(56,189,248,.4); }
+.badge.cancelled { color: var(--amber); border-color: rgba(251,191,36,.4); }
 .badge.unknown { color: var(--muted); }
 .badge.warn { color: var(--amber); border-color: rgba(251,191,36,.4); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
@@ -350,6 +351,14 @@ pre.log { background: var(--bg); border: 1px solid var(--border); border-radius:
 .empty { color: var(--muted); padding: 24px; text-align: center; }
 .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .detail-grid .field b { font-weight: 500; word-break: break-all; }
+.field-help { color: var(--muted); font-size: 12px; }
+.run-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.run-progress-head > div { display: flex; align-items: baseline; gap: 10px; }
+.run-progress-head strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.run-progress { height: 10px; }
+.run-progress > div { transition: width .25s ease; }
+.run-counters { display: flex; flex-wrap: wrap; gap: 10px 20px; color: var(--muted); font-size: 12.5px; }
+.run-counters b { color: var(--text); font-weight: 600; }
 
 /* ---- responsive ---- */
 @media (max-width: 880px) {
@@ -361,4 +370,6 @@ pre.log { background: var(--bg); border: 1px solid var(--border); border-radius:
   .dash-row { grid-template-columns: 1fr; }
   .grid2, .grid3, .detail-grid { grid-template-columns: 1fr; }
   .uname { display: none; }
+  .run-progress-head { align-items: flex-start; flex-direction: column; }
+  .run-progress-head button { width: 100%; }
 }
