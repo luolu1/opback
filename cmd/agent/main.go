@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 )
 
 func main() {
+	printVersion := flag.Bool("version", false, "打印版本并退出")
 	panelURL := flag.String("panel-url", envOr("OPBACK_PANEL_URL", ""), "面板地址，例如 http://10.0.0.1:8080（必填）")
 	name := flag.String("name", envOr("OPBACK_NAME", ""), "本节点在面板中显示的名称（默认使用主机名）")
 	enrollToken := flag.String("enroll-token", envOr("OPBACK_ENROLL_TOKEN", ""), "面板注册密钥（面板启用时必填）")
@@ -24,6 +26,10 @@ func main() {
 	once := flag.Bool("once", false, "只执行一轮所有启用的任务后退出（适合搭配系统 cron）")
 
 	flag.Parse()
+	if *printVersion {
+		fmt.Println(agent.Version)
+		return
+	}
 
 	ag, err := agent.New(agent.Config{
 		PanelURL:    *panelURL,

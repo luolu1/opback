@@ -21,8 +21,8 @@ import (
 	"opback/internal/types"
 )
 
-// Version is reported to the panel and shown in the UI.
-const Version = "0.1.0"
+// Version is reported to the panel and injected into release builds.
+var Version = "dev"
 
 // Agent is the per-machine worker that pulls jobs from the panel and uploads
 // files to OpenList.

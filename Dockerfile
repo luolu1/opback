@@ -25,7 +25,7 @@ RUN set -eux; \
     for target in linux/amd64 linux/arm64 linux/arm windows/amd64 darwin/arm64; do \
       os="${target%%/*}"; arch="${target##*/}"; ext=""; \
       if [ "$os" = "windows" ]; then ext=".exe"; fi; \
-      GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+      GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X opback/internal/agent.Version=${VERSION}" \
         -o "/out/agents/opback-agent-${os}-${arch}${ext}" ./cmd/agent; \
     done
 
