@@ -65,11 +65,19 @@ func runBackup(
 	}
 
 	root := filepath.Clean(job.Source)
+	logf("开始扫描源路径：%s", root)
 	info, err := os.Stat(root)
 	if err != nil {
 		addErr("无法访问源路径 %s: %v", job.Source, err)
 		progress(stats)
 		return stats, errs
+	}
+	destinationRoot := job.Dest
+	if info.IsDir() {
+		destinationRoot = joinOpenList(destinationRoot, filepath.Base(root))
+		logf("目录源的目标根目录：%s", destinationRoot)
+	} else {
+		logf("文件源的目标路径：%s", joinOpenList(destinationRoot, filepath.Base(root)))
 	}
 
 	// Collect the file list.
@@ -85,6 +93,7 @@ func runBackup(
 	} else {
 		files = collectFiles(root, job.Options, logf)
 	}
+	logf("扫描完成：发现 %d 个文件，共 %d 字节", len(files), totalFileBytes(files))
 
 	selected := files
 	for _, f := range selected {
@@ -106,6 +115,7 @@ func runBackup(
 			for _, f := range selected {
 				if mf.matches(f.rel, f.size, f.mtime) {
 					stats.FilesSkipped++
+					logf("增量跳过：%s", f.rel)
 					continue
 				}
 				toStage = append(toStage, f)
@@ -134,19 +144,24 @@ func runBackup(
 				logf("复制阶段没有可上传的文件")
 			}
 		} else {
+			uploadJob := job
+			uploadJob.Dest = destinationRoot
 			// Make sure the destination root exists.
-			if err := ol.EnsureDir(ctx, job.Dest); err != nil {
-				addErr("创建目标目录 %s 失败: %v", job.Dest, err)
+			if err := ol.EnsureDir(ctx, destinationRoot); err != nil {
+				addErr("创建目标目录 %s 失败: %v", destinationRoot, err)
 				return stats, errs
 			}
+			logf("目标目录已确认：%s", destinationRoot)
 
 			// Create every needed sub-directory in depth order.
 			for _, d := range neededDirs(uploadFiles) {
 				if ctx.Err() != nil {
 					break
 				}
-				if err := ol.Mkdir(ctx, joinOpenList(job.Dest, d)); err != nil {
-					addErr("创建目录 %s 失败: %v", joinOpenList(job.Dest, d), err)
+				if err := ol.Mkdir(ctx, joinOpenList(destinationRoot, d)); err != nil {
+					addErr("创建目录 %s 失败: %v", joinOpenList(destinationRoot, d), err)
+				} else {
+					logf("创建目标子目录：%s", joinOpenList(destinationRoot, d))
 				}
 			}
 
@@ -171,17 +186,25 @@ func runBackup(
 						if ctx.Err() != nil {
 							return
 						}
-						uploadOneFile(ctx, ol, job, mf, f, &mu, &stats, addErr, logf)
-						progress(stats)
+						uploadOneFile(ctx, ol, uploadJob, mf, f, &mu, &stats, addErr, logf)
+						mu.Lock()
+						snapshot := stats
+						mu.Unlock()
+						progress(snapshot)
 					}
 				}()
 			}
 
+		queueLoop:
 			for _, f := range uploadFiles {
 				if ctx.Err() != nil {
 					break
 				}
-				queue <- f
+				select {
+				case queue <- f:
+				case <-ctx.Done():
+					break queueLoop
+				}
 			}
 			close(queue)
 			wg.Wait()
@@ -190,6 +213,7 @@ func runBackup(
 
 	if ctx.Err() != nil {
 		addErr("任务已取消：%v", ctx.Err())
+		logf("任务收到取消信号")
 	}
 
 	// Reconcile the destination with the source selection: remove files that
@@ -202,7 +226,9 @@ func runBackup(
 		for _, f := range selected {
 			expected[f.rel] = true
 		}
-		cleanupDestination(ctx, ol, job, expected, time.Now().UTC(), addErr, logf)
+		cleanupJob := job
+		cleanupJob.Dest = destinationRoot
+		cleanupDestination(ctx, ol, cleanupJob, expected, time.Now().UTC(), addErr, logf)
 	}
 
 	if err := mf.save(); err != nil {
@@ -268,6 +294,9 @@ func stageFiles(
 		}
 		info, changed, err := copyToStaging(ctx, f.abs, dst, job.Options.VerifyConsistency)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				break
+			}
 			if errors.Is(err, fs.ErrNotExist) {
 				stats.FilesSkipped++
 				logf("跳过已消失的文件 %s", f.rel)
@@ -386,11 +415,13 @@ func uploadOneFile(
 	addErr func(string, ...any),
 	logf func(string, ...any),
 ) {
+	logf("准备处理文件：%s", f.rel)
 	// Incremental: skip unchanged files already present from a prior run.
 	if job.Options.Incremental && mf.matches(f.rel, f.size, f.mtime) {
 		mu.Lock()
 		stats.FilesSkipped++
 		mu.Unlock()
+		logf("增量跳过：%s", f.rel)
 		return
 	}
 
@@ -406,6 +437,7 @@ func uploadOneFile(
 		consistent bool
 	)
 	for attempt := 1; attempt <= attempts; attempt++ {
+		logf("开始上传：%s（第 %d/%d 次）", f.rel, attempt, attempts)
 		fh, err := os.Open(f.abs)
 		if err != nil {
 			// The file was listed earlier but vanished before we got to it. This
@@ -423,6 +455,7 @@ func uploadOneFile(
 			stats.FilesFailed++
 			mu.Unlock()
 			addErr("打开 %s 失败: %v", f.rel, err)
+			logf("上传失败，无法打开：%s", f.rel)
 			return
 		}
 
@@ -433,6 +466,7 @@ func uploadOneFile(
 			stats.FilesFailed++
 			mu.Unlock()
 			addErr("读取 %s 元数据失败: %v", f.rel, statErr)
+			logf("上传失败，无法读取元数据：%s", f.rel)
 			return
 		}
 
@@ -442,10 +476,14 @@ func uploadOneFile(
 		})
 		fh.Close()
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			mu.Lock()
 			stats.FilesFailed++
 			mu.Unlock()
 			addErr("上传 %s 失败: %v", f.rel, err)
+			logf("上传失败：%s（%v）", f.rel, err)
 			return
 		}
 
@@ -480,6 +518,15 @@ func uploadOneFile(
 	if !consistent {
 		addErr("文件 %s 在上传期间持续被修改，已保存当时内容但可能不是一致快照；可启用「先复制到临时目录再上传」，或先用数据库工具生成一致性转储再备份该转储", f.rel)
 	}
+	logf("上传完成：%s（%d 字节）", f.rel, uploaded)
+}
+
+func totalFileBytes(files []sourceFile) int64 {
+	var total int64
+	for _, f := range files {
+		total += f.size
+	}
+	return total
 }
 
 // collectFiles walks the source root, honouring the include/exclude options.

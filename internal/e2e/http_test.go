@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,7 +87,13 @@ func TestHTTPRegisterAndManualRun(t *testing.T) {
 	if run.Status != types.RunSuccess || run.FilesDone != 1 {
 		t.Fatalf("run status=%s done=%d, want success/1", run.Status, run.FilesDone)
 	}
-	if got := string(mock.uploaded()["/srv/web-1/index.html"]); got != "<h1>hi</h1>" {
+	joinedLog := strings.Join(run.Log, "\n")
+	for _, want := range []string{"开始扫描源路径", "开始上传", "上传完成"} {
+		if !strings.Contains(joinedLog, want) {
+			t.Fatalf("run log missing %q: %v", want, run.Log)
+		}
+	}
+	if got := string(mock.uploaded()["/srv/web-1/"+filepath.Base(src)+"/index.html"]); got != "<h1>hi</h1>" {
 		t.Fatalf("unexpected uploaded content: %q", got)
 	}
 }

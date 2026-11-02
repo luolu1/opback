@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -10,6 +11,53 @@ import (
 	"opback/internal/openlist"
 	"opback/internal/types"
 )
+
+func TestDirectorySourceUsesDestinationAsRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"file.txt", filepath.Join("sub", "nested.txt")} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("data"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files := collectFiles(root, types.JobOptions{}, func(string, ...any) {})
+	got := make(map[string]string, len(files))
+	dest := joinOpenList("/backups", filepath.Base(root))
+	for _, f := range files {
+		got[joinOpenList(dest, f.rel)] = f.rel
+	}
+
+	want := map[string]string{
+		"/backups/" + filepath.Base(root) + "/file.txt":       "file.txt",
+		"/backups/" + filepath.Base(root) + "/sub/nested.txt": "sub/nested.txt",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got destination paths %v, want %v", got, want)
+	}
+	for path, rel := range want {
+		if got[path] != rel {
+			t.Fatalf("destination path %q has relative path %q, want %q", path, got[path], rel)
+		}
+	}
+	if _, ok := got["/backups/file.txt"]; ok {
+		t.Fatalf("source directory basename was not appended to destination: %v", got)
+	}
+}
+
+func TestSingleFileSourceKeepsFilenameUnderDestination(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(root, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := joinOpenList("/backups", filepath.Base(root))
+	if path != "/backups/file.txt" {
+		t.Fatalf("single-file destination = %q, want /backups/file.txt", path)
+	}
+}
 
 // TestUploadOneFileSkipsVanishedFile covers the race where a file is listed by
 // collectFiles but disappears before the upload worker opens it. Live

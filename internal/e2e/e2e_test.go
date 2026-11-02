@@ -373,7 +373,6 @@ func TestEndToEndBackupAndIncremental(t *testing.T) {
 	mustWrite(t, filepath.Join(src, "sub", "b.txt"), "world")
 	mustWrite(t, filepath.Join(src, "sub", "skip.log"), "ignore me")
 
-	// 5. Job: back up src to /backup on OpenList, excluding *.log.
 	if _, err := st.CreateJob(types.Job{
 		Name:     "test job",
 		NodeID:   node.ID,
@@ -404,13 +403,14 @@ func TestEndToEndBackupAndIncremental(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	ups := mock.uploaded()
-	if _, ok := ups["/backup/a.txt"]; !ok {
-		t.Fatalf("expected /backup/a.txt to be uploaded, got %v", keys(ups))
+	dest := "/backup/" + filepath.Base(src)
+	if _, ok := ups[dest+"/a.txt"]; !ok {
+		t.Fatalf("expected %s/a.txt to be uploaded, got %v", dest, keys(ups))
 	}
-	if got := string(ups["/backup/sub/b.txt"]); got != "world" {
-		t.Fatalf("expected /backup/sub/b.txt=world, got %q", got)
+	if got := string(ups[dest+"/sub/b.txt"]); got != "world" {
+		t.Fatalf("expected %s/sub/b.txt=world, got %q", dest, got)
 	}
-	if _, ok := ups["/backup/sub/skip.log"]; ok {
+	if _, ok := ups[dest+"/sub/skip.log"]; ok {
 		t.Fatalf("excluded file was uploaded: %v", keys(ups))
 	}
 
@@ -447,7 +447,8 @@ func TestStagingUploadsStableCopy(t *testing.T) {
 
 	var puts int32
 	mock.setOnPut(func(p string) {
-		if p == "/backup/live.txt" && atomic.AddInt32(&puts, 1) == 1 {
+		dest := "/backup/" + filepath.Base(src) + "/live.txt"
+		if p == dest && atomic.AddInt32(&puts, 1) == 1 {
 			// The source changes after the copy was made. The upload must not
 			// see this new content.
 			_ = os.WriteFile(target, []byte("v2-longer"), 0o644)
@@ -491,7 +492,7 @@ func TestStagingUploadsStableCopy(t *testing.T) {
 	if got := atomic.LoadInt32(&puts); got != 1 {
 		t.Fatalf("upload attempts = %d, want 1 (staged copy is stable)", got)
 	}
-	if got := string(mock.uploaded()["/backup/live.txt"]); got != "v1" {
+	if got := string(mock.uploaded()["/backup/"+filepath.Base(src)+"/live.txt"]); got != "v1" {
 		t.Fatalf("stored content = %q, want the pre-change snapshot %q", got, "v1")
 	}
 	if got := string(mustRead(t, target)); got != "v2-longer" {
@@ -571,7 +572,8 @@ func TestVerifyConsistencyRetriesChangedFile(t *testing.T) {
 
 	var puts int32
 	mock.setOnPut(func(p string) {
-		if p == "/backup/live.txt" && atomic.AddInt32(&puts, 1) == 1 {
+		dest := "/backup/" + filepath.Base(src) + "/live.txt"
+		if p == dest && atomic.AddInt32(&puts, 1) == 1 {
 			// Different size guarantees detection even on filesystems with a
 			// coarse mtime resolution.
 			_ = os.WriteFile(target, []byte("v2-longer"), 0o644)
@@ -613,7 +615,7 @@ func TestVerifyConsistencyRetriesChangedFile(t *testing.T) {
 	if got := atomic.LoadInt32(&puts); got != 2 {
 		t.Fatalf("upload attempts = %d, want 2 (one retry)", got)
 	}
-	if got := string(mock.uploaded()["/backup/live.txt"]); got != "v2-longer" {
+	if got := string(mock.uploaded()["/backup/"+filepath.Base(src)+"/live.txt"]); got != "v2-longer" {
 		t.Fatalf("stored content = %q, want the post-change content", got)
 	}
 	run := latestRun(t, st)
@@ -681,7 +683,8 @@ func TestDeleteExtraMovesToTrash(t *testing.T) {
 	if err := ag.Run(ctx); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if !mock.has("/backup/keep.txt") || !mock.has("/backup/sub/gone.txt") {
+	dest := "/backup/" + filepath.Base(src)
+	if !mock.has(dest+"/keep.txt") || !mock.has(dest+"/sub/gone.txt") {
 		t.Fatalf("initial uploads missing: %v", mock.paths())
 	}
 
@@ -693,20 +696,20 @@ func TestDeleteExtraMovesToTrash(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 
-	if mock.has("/backup/sub/gone.txt") {
+	if mock.has(dest + "/sub/gone.txt") {
 		t.Fatalf("extra file still at destination: %v", mock.paths())
 	}
 	found := false
 	for _, p := range mock.paths() {
-		if strings.HasPrefix(p, "/backup/.olb-trash/") && strings.HasSuffix(p, "/sub/gone.txt") {
+		if strings.HasPrefix(p, dest+"/.olb-trash/") && strings.HasSuffix(p, "/sub/gone.txt") {
 			found = true
 		}
 	}
 	if !found {
 		t.Fatalf("gone.txt was not moved to trash: %v", mock.paths())
 	}
-	if mock.hasDir("/backup/sub") {
-		t.Fatalf("empty directory /backup/sub was not pruned")
+	if mock.hasDir(dest + "/sub") {
+		t.Fatalf("empty directory %s/sub was not pruned", dest)
 	}
 }
 
@@ -744,11 +747,12 @@ func TestDeleteExtraWithoutRetention(t *testing.T) {
 		t.Fatalf("second run: %v", err)
 	}
 
-	if mock.has("/backup/b.txt") {
+	dest := "/backup/" + filepath.Base(src)
+	if mock.has(dest + "/b.txt") {
 		t.Fatalf("extra file was not deleted: %v", mock.paths())
 	}
 	for _, p := range mock.paths() {
-		if strings.Contains(p, "/.olb-trash/") {
+		if strings.HasPrefix(p, dest+"/.olb-trash/") {
 			t.Fatalf("unexpected trash entry with zero retention: %s", p)
 		}
 	}
@@ -772,8 +776,9 @@ func TestTrashRetentionPrunesExpiredSnapshots(t *testing.T) {
 
 	const old = "20200101T000000Z"
 	fresh := time.Now().UTC().Format("20060102T150405Z")
-	mock.seed("/backup/.olb-trash/"+old+"/old.txt", "x")
-	mock.seed("/backup/.olb-trash/"+fresh+"/new.txt", "y")
+	dest := "/backup/" + filepath.Base(src)
+	mock.seed(dest+"/.olb-trash/"+old+"/old.txt", "x")
+	mock.seed(dest+"/.olb-trash/"+fresh+"/new.txt", "y")
 
 	ag, err := agent.New(agent.Config{PanelURL: panelTS.URL, Name: node.Name, StateDir: agentDir, Once: true})
 	if err != nil {
@@ -786,10 +791,10 @@ func TestTrashRetentionPrunesExpiredSnapshots(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	if mock.has("/backup/.olb-trash/" + old + "/old.txt") {
+	if mock.has(dest + "/.olb-trash/" + old + "/old.txt") {
 		t.Fatalf("expired snapshot was not purged: %v", mock.paths())
 	}
-	if !mock.has("/backup/.olb-trash/" + fresh + "/new.txt") {
+	if !mock.has(dest + "/.olb-trash/" + fresh + "/new.txt") {
 		t.Fatalf("fresh snapshot was wrongly purged: %v", mock.paths())
 	}
 }

@@ -83,16 +83,18 @@ func TestMultiOpenListRouting(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	if got := string(mockA.uploaded()["/dataA/a.txt"]); got != "aaa" {
-		t.Fatalf("connection A missing /dataA/a.txt: %v", mockA.paths())
+	destA := "/dataA/" + filepath.Base(srcA)
+	destB := "/dataB/" + filepath.Base(srcB)
+	if got := string(mockA.uploaded()[destA+"/a.txt"]); got != "aaa" {
+		t.Fatalf("connection A missing %s/a.txt: %v", destA, mockA.paths())
 	}
-	if got := string(mockB.uploaded()["/dataB/b.txt"]); got != "bbb" {
-		t.Fatalf("connection B missing /dataB/b.txt: %v", mockB.paths())
+	if got := string(mockB.uploaded()[destB+"/b.txt"]); got != "bbb" {
+		t.Fatalf("connection B missing %s/b.txt: %v", destB, mockB.paths())
 	}
-	if _, ok := mockA.uploaded()["/dataB/b.txt"]; ok {
+	if _, ok := mockA.uploaded()[destB+"/b.txt"]; ok {
 		t.Fatalf("job B leaked onto connection A: %v", mockA.paths())
 	}
-	if _, ok := mockB.uploaded()["/dataA/a.txt"]; ok {
+	if _, ok := mockB.uploaded()[destA+"/a.txt"]; ok {
 		t.Fatalf("job A leaked onto connection B: %v", mockB.paths())
 	}
 
