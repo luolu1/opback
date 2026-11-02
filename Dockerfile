@@ -15,7 +15,7 @@ RUN go mod download
 
 COPY . .
 
-ARG VERSION=docker
+ARG VERSION=v0.1.1
 # 面板二进制
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/opback-panel ./cmd/panel

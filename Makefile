@@ -1,5 +1,5 @@
 BIN_DIR := bin
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= v0.1.1
 LDFLAGS := -s -w
 PANEL_LDFLAGS := $(LDFLAGS) -X main.version=$(VERSION)
 AGENT_LDFLAGS := $(LDFLAGS) -X opback/internal/agent.Version=$(VERSION)

@@ -22,7 +22,7 @@ services:
     build:
       context: .
       args:
-        VERSION: "${OPBACK_VERSION:-docker}"
+        VERSION: "${OPBACK_VERSION:-v0.1.1}"
     image: opback:latest
     container_name: opback
     restart: unless-stopped
