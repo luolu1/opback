@@ -80,10 +80,13 @@ func (s *Server) tgCall(ctx context.Context, token, method string, payload any) 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("读取 Telegram 响应失败: %w", err)
+	}
 	var env tgEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, fmt.Errorf("Telegram 返回异常 (HTTP %d)", resp.StatusCode)
+		return nil, fmt.Errorf("Telegram 返回异常 (HTTP %d): %w", resp.StatusCode, err)
 	}
 	if !env.OK {
 		if env.Description != "" {

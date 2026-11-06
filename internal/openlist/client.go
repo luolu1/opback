@@ -114,7 +114,10 @@ func (c *Client) Login(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("openlist: login: read response: %w", err)
+	}
 	var env apiResponse
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return fmt.Errorf("openlist: login: bad response (http %d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
@@ -206,13 +209,16 @@ func (c *Client) do(ctx context.Context, method, apiPath string, header http.Hea
 		if err != nil {
 			return nil, err
 		}
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("openlist: %s %s: read response: %w", method, apiPath, err)
+		}
 
 		env := &apiResponse{}
 		if len(raw) > 0 {
 			// Not every endpoint guarantees JSON; fall back to status text.
-			if err := json.Unmarshal(raw, env); err != nil {
+			if jsonErr := json.Unmarshal(raw, env); jsonErr != nil {
 				env.Code = resp.StatusCode
 				env.Message = strings.TrimSpace(string(raw))
 			}

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 )
 
 // ErrUninstalled is returned by Run after the agent has carried out a
@@ -60,8 +59,7 @@ func (a *Agent) notifyUninstall(ctx context.Context) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Node-Token", token)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := a.http.Do(req)
 	if err != nil {
 		return err
 	}

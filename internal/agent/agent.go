@@ -413,13 +413,16 @@ func (a *Agent) register(ctx context.Context) error {
 		return err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("读取注册响应失败: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("注册失败 (http %d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var out registerResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return err
+		return fmt.Errorf("解析注册响应失败: %w", err)
 	}
 	if out.Token == "" {
 		return fmt.Errorf("注册响应缺少令牌")
@@ -457,7 +460,10 @@ func (a *Agent) sync(ctx context.Context) (*types.SyncResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, fmt.Errorf("读取同步响应失败: %w", err)
+	}
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Token no longer valid: forget it and register again next cycle.
