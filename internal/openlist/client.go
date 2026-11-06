@@ -269,13 +269,16 @@ func (c *Client) List(ctx context.Context, dir string, refresh bool) (*ListResul
 	var all []FsObject
 	var first ListResult
 	for page := 1; page <= maxPages; page++ {
-		payload, _ := json.Marshal(map[string]any{
+		payload, err := json.Marshal(map[string]any{
 			"path":     normalize(dir),
 			"password": "",
 			"refresh":  refresh && page == 1,
 			"page":     page,
 			"per_page": perPage,
 		})
+		if err != nil {
+			return nil, fmt.Errorf("openlist: list %s: marshal request: %w", dir, err)
+		}
 		h := http.Header{"Content-Type": []string{"application/json"}}
 		env, err := c.do(ctx, http.MethodPost, "/api/fs/list", h, bytesBody(payload))
 		if err != nil {
@@ -302,7 +305,10 @@ func (c *Client) List(ctx context.Context, dir string, refresh bool) (*ListResul
 
 // Get stats a single path.
 func (c *Client) Get(ctx context.Context, p string) (*FsObject, error) {
-	payload, _ := json.Marshal(map[string]any{"path": normalize(p), "password": ""})
+	payload, err := json.Marshal(map[string]any{"path": normalize(p), "password": ""})
+	if err != nil {
+		return nil, fmt.Errorf("openlist: get %s: marshal request: %w", p, err)
+	}
 	h := http.Header{"Content-Type": []string{"application/json"}}
 	env, err := c.do(ctx, http.MethodPost, "/api/fs/get", h, bytesBody(payload))
 	if err != nil {
@@ -320,9 +326,12 @@ func (c *Client) Get(ctx context.Context, p string) (*FsObject, error) {
 // Mkdir creates a single directory. It is not an error if the directory
 // already exists.
 func (c *Client) Mkdir(ctx context.Context, dir string) error {
-	payload, _ := json.Marshal(map[string]any{"path": normalize(dir)})
+	payload, err := json.Marshal(map[string]any{"path": normalize(dir)})
+	if err != nil {
+		return fmt.Errorf("openlist: mkdir %s: marshal request: %w", dir, err)
+	}
 	h := http.Header{"Content-Type": []string{"application/json"}}
-	_, err := c.do(ctx, http.MethodPost, "/api/fs/mkdir", h, bytesBody(payload))
+	_, err = c.do(ctx, http.MethodPost, "/api/fs/mkdir", h, bytesBody(payload))
 	if err != nil && isExistsErr(err) {
 		return nil
 	}
@@ -385,9 +394,12 @@ func (c *Client) Put(ctx context.Context, destPath string, r io.ReadSeeker, size
 
 // Remove deletes the named entries inside dir.
 func (c *Client) Remove(ctx context.Context, dir string, names []string) error {
-	payload, _ := json.Marshal(map[string]any{"dir": normalize(dir), "names": names})
+	payload, err := json.Marshal(map[string]any{"dir": normalize(dir), "names": names})
+	if err != nil {
+		return fmt.Errorf("openlist: remove %s: marshal request: %w", dir, err)
+	}
 	h := http.Header{"Content-Type": []string{"application/json"}}
-	_, err := c.do(ctx, http.MethodPost, "/api/fs/remove", h, bytesBody(payload))
+	_, err = c.do(ctx, http.MethodPost, "/api/fs/remove", h, bytesBody(payload))
 	return err
 }
 
@@ -397,21 +409,27 @@ func (c *Client) Move(ctx context.Context, srcDir, dstDir string, names []string
 	if len(names) == 0 {
 		return nil
 	}
-	payload, _ := json.Marshal(map[string]any{
+	payload, err := json.Marshal(map[string]any{
 		"src_dir": normalize(srcDir),
 		"dst_dir": normalize(dstDir),
 		"names":   names,
 	})
+	if err != nil {
+		return fmt.Errorf("openlist: move %s: marshal request: %w", srcDir, err)
+	}
 	h := http.Header{"Content-Type": []string{"application/json"}}
-	_, err := c.do(ctx, http.MethodPost, "/api/fs/move", h, bytesBody(payload))
+	_, err = c.do(ctx, http.MethodPost, "/api/fs/move", h, bytesBody(payload))
 	return err
 }
 
 // RemoveEmptyDirs recursively deletes empty directories under dir.
 func (c *Client) RemoveEmptyDirs(ctx context.Context, dir string) error {
-	payload, _ := json.Marshal(map[string]any{"src_dir": normalize(dir)})
+	payload, err := json.Marshal(map[string]any{"src_dir": normalize(dir)})
+	if err != nil {
+		return fmt.Errorf("openlist: remove_empty_directory %s: marshal request: %w", dir, err)
+	}
 	h := http.Header{"Content-Type": []string{"application/json"}}
-	_, err := c.do(ctx, http.MethodPost, "/api/fs/remove_empty_directory", h, bytesBody(payload))
+	_, err = c.do(ctx, http.MethodPost, "/api/fs/remove_empty_directory", h, bytesBody(payload))
 	return err
 }
 
