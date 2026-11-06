@@ -400,7 +400,7 @@ type registerResponse struct {
 }
 
 func (a *Agent) register(ctx context.Context) error {
-	reqBody, _ := json.Marshal(registerRequest{
+	reqBody, err := json.Marshal(registerRequest{
 		Name:        a.cfg.Name,
 		Hostname:    a.hostname,
 		OS:          runtime.GOOS,
@@ -408,6 +408,9 @@ func (a *Agent) register(ctx context.Context) error {
 		Version:     Version,
 		EnrollToken: a.cfg.EnrollToken,
 	})
+	if err != nil {
+		return fmt.Errorf("序列化注册请求失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.PanelURL+"/api/agent/register", bytes.NewReader(reqBody))
 	if err != nil {
 		return err
@@ -447,13 +450,16 @@ func (a *Agent) sync(ctx context.Context) (*types.SyncResponse, error) {
 	}
 
 	reports := a.snapshotReports()
-	reqBody, _ := json.Marshal(types.SyncRequest{
+	reqBody, err := json.Marshal(types.SyncRequest{
 		Hostname:     a.hostname,
 		OS:           runtime.GOOS,
 		Arch:         runtime.GOARCH,
 		AgentVersion: Version,
 		Reports:      reports,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("序列化同步请求失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.PanelURL+"/api/agent/sync", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
