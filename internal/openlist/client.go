@@ -98,10 +98,13 @@ type apiResponse struct {
 
 // Login authenticates and caches the resulting token.
 func (c *Client) Login(ctx context.Context) error {
-	body, _ := json.Marshal(map[string]string{
+	body, err := json.Marshal(map[string]string{
 		"username": c.username,
 		"password": c.password,
 	})
+	if err != nil {
+		return fmt.Errorf("openlist: login: marshal request: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/auth/login", bytes.NewReader(body))
 	if err != nil {
 		return err

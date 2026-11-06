@@ -13,3 +13,10 @@ agent-state/
 # Logs / temp
 *.log
 *.tmp
+
+# Compiled binaries (built locally, not tracked)
+agent
+panel
+
+# OMO tooling
+.omo/
