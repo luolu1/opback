@@ -19,7 +19,13 @@ import (
 // for finished runs, plus a tiny long-polling bot that answers /status queries.
 
 // tgHTTP is shared by every Telegram call. Contexts carry the deadlines.
-var tgHTTP = &http.Client{}
+var tgHTTP = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
 
 type tgEnvelope struct {
 	OK          bool            `json:"ok"`

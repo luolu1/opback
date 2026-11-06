@@ -123,12 +123,18 @@ func (a *Agent) Run(ctx context.Context) error {
 						a.startJob(job, types.TriggerManual)
 					}
 				case "cancel":
+					if cmd.RunID == "" {
+						log.Printf("忽略无效取消命令：缺少 run_id")
+						continue
+					}
 					a.cancelRun(cmd.RunID)
 				case "uninstall":
 					if err := a.uninstall(ctx); err != nil {
 						log.Printf("远程卸载失败：%v（请在目标机器上手动清理）", err)
 					}
 					return ErrUninstalled
+				default:
+					log.Printf("忽略未知面板命令：%q", cmd.Action)
 				}
 			}
 			a.scheduleDue(resp.Jobs)
